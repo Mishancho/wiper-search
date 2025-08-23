@@ -1,12 +1,9 @@
 import os
 import re
+import json
 from flask import Flask, render_template, request, jsonify
 import gspread
 from google.oauth2.service_account import Credentials
-from dotenv import load_dotenv
-
-# Загружаем переменные окружения
-load_dotenv()
 
 app = Flask(__name__)
 
@@ -19,23 +16,20 @@ SCOPES = [
 def get_google_sheets_data():
     """Получает данные из Google Sheets с информацией о типе щёток"""
     try:
-        # Используем service account credentials
-        credentials = Credentials.from_service_account_file(
-            'service-account-key.json', 
-            scopes=SCOPES
-        )
+        # Загружаем JSON ключ из переменной окружения
+        service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY"))
+        credentials = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
         
         client = gspread.authorize(credentials)
         
         # Получаем ID таблицы из переменной окружения
         spreadsheet_id = os.getenv('GOOGLE_SHEETS_ID')
         if not spreadsheet_id:
-            raise ValueError("GOOGLE_SHEETS_ID не установлен в .env файле")
+            raise ValueError("GOOGLE_SHEETS_ID не установлен в переменной окружения")
         
         # Открываем таблицу
         spreadsheet = client.open_by_key(spreadsheet_id)
         
-        # Получаем все листы
         all_data = []
         
         for worksheet in spreadsheet.worksheets():
@@ -43,7 +37,6 @@ def get_google_sheets_data():
                 data = worksheet.get_all_values()
                 current_section = None
                 
-                # Определяем тип щёток по содержимому листа
                 for row in data:
                     if len(row) > 0 and row[0].strip():
                         # Определяем секцию по заголовкам
@@ -52,14 +45,12 @@ def get_google_sheets_data():
                         elif 'back wipers' in row[0].lower():
                             current_section = 'Back Wipers'
                         elif len(row) >= 2 and row[0].strip() and row[1].strip():
-                            # Это данные, добавляем с информацией о секции
                             if not any(keyword in row[0].lower() for keyword in ['wipers', 'front', 'back']):
                                 all_data.append({
                                     'main_part': row[0].strip(),
                                     'alt_parts': row[1].strip(),
                                     'section': current_section
                                 })
-                            
             except Exception as e:
                 print(f"Ошибка при чтении листа {worksheet.title}: {e}")
                 continue
@@ -81,15 +72,12 @@ def normalize_data(raw_data):
             section = item.get('section', 'Unknown')
             
             if main_part and alt_parts_str:
-                # Улучшенная обработка разделителей для вашей таблицы
-                # Поддерживаем: /, ,, (, ), пробелы
-                # Обрабатываем скобки как отдельные разделители
                 alt_parts_str = alt_parts_str.replace('(', '/').replace(')', '/')
                 alt_parts = re.split(r'[/,\s]+', alt_parts_str)
                 
                 for alt_part in alt_parts:
                     alt_part = alt_part.strip()
-                    if alt_part and len(alt_part) > 0:  # Пропускаем пустые строки
+                    if alt_part:
                         normalized_data.append({
                             'main_part': main_part,
                             'alt_part': alt_part,
@@ -103,7 +91,6 @@ def search_analogs(part_number, data):
     part_number = part_number.upper().strip()
     found_groups = {}
     
-    # Ищем артикул в данных
     for item in data:
         if (item['main_part'].upper() == part_number or 
             item['alt_part'].upper() == part_number):
@@ -120,7 +107,6 @@ def search_analogs(part_number, data):
             found_groups[main_part]['parts'].add(item['alt_part'])
             found_groups[main_part]['parts'].add(item['main_part'])
     
-    # Преобразуем в список для ответа
     result = []
     for main_part, group_info in found_groups.items():
         parts_list = sorted(list(group_info['parts']))
@@ -134,12 +120,10 @@ def search_analogs(part_number, data):
 
 @app.route('/')
 def index():
-    """Главная страница"""
     return render_template('index.html')
 
 @app.route('/search', methods=['POST'])
 def search():
-    """API endpoint для поиска аналогов"""
     try:
         data = request.get_json()
         part_number = data.get('part_number', '').strip()
@@ -147,15 +131,11 @@ def search():
         if not part_number:
             return jsonify({'error': 'Part number not specified'}), 400
         
-        # Получаем данные из Google Sheets
         raw_data = get_google_sheets_data()
         if not raw_data:
             return jsonify({'error': 'Failed to get data from table'}), 500
         
-        # Нормализуем данные
         normalized_data = normalize_data(raw_data)
-        
-        # Ищем аналоги
         results = search_analogs(part_number, normalized_data)
         
         if not results:
@@ -174,7 +154,6 @@ def search():
 
 @app.route('/health')
 def health():
-    """Проверка работоспособности приложения"""
     return jsonify({'status': 'ok'})
 
 if __name__ == '__main__':
