@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#4a5568">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Brake Pads Search">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Brake Pads Search</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <!-- Mobile Icons -->
+    <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛑</text></svg>">
+    <link rel="icon" type="image/png" sizes="16x16" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛑</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛑</text></svg>">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    
+    <style>
+        /* Brake pads specific styles */
+        body {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+        }
+        
+        .logo i {
+            color: #68d391;
+        }
+        
+        .search-input-wrapper:focus-within {
+            border-color: #4a5568;
+            box-shadow: 0 0 0 3px rgba(74, 85, 104, 0.1);
+        }
+        
+        .search-button {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+        }
+        
+        .search-button:hover {
+            box-shadow: 0 10px 20px rgba(74, 85, 104, 0.3);
+        }
+        
+        .result-group {
+            border-left: 5px solid #4a5568;
+        }
+        
+        .result-main {
+            color: #4a5568;
+        }
+        
+        .result-main i {
+            color: #38a169;
+        }
+        
+        .section-badge {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+            box-shadow: 0 2px 4px rgba(74, 85, 104, 0.3);
+        }
+        
+        .part-badge {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+            box-shadow: 0 2px 8px rgba(74, 85, 104, 0.3);
+        }
+        
+        .part-badge.highlighted {
+            background: linear-gradient(135deg, #38a169 0%, #48bb78 100%);
+            box-shadow: 0 2px 8px rgba(56, 161, 105, 0.3);
+        }
+        
+        .search-tips i {
+            color: #4a5568;
+        }
+        
+        .result-details {
+            margin-top: 15px;
+        }
+        
+        .detail-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+        }
+        
+        .detail-label {
+            font-weight: 600;
+            color: #4a5568;
+            min-width: 120px;
+            margin-right: 10px;
+        }
+        
+        .detail-value {
+            color: #333;
+            font-weight: 500;
+            background: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            flex: 1;
+        }
+        
+        .nav-link {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            text-decoration: none;
+            font-size: 1.1rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 25px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        @media (max-width: 768px) {
+            .nav-link {
+                top: 15px;
+                left: 15px;
+                font-size: 1rem;
+                padding: 8px 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <a href="/" class="nav-link">
+        <i class="fas fa-arrow-left"></i>
+        Wiper Blades
+    </a>
+    
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <i class="fas fa-circle-stop"></i>
+                <h1>Brake Pads Search</h1>
+            </div>
+            <p class="subtitle">Find interchangeable brake pad part numbers</p>
+        </header>
+
+        <main class="main">
+            <div class="search-container">
+                <div class="search-box">
+                    <div class="search-input-wrapper">
+                        <i class="fas fa-search search-icon"></i>
+                        <input 
+                            type="text" 
+                            id="partNumber" 
+                            placeholder="Enter part number (e.g., 1J0698151, 5N0698151...)"
+                            class="search-input"
+                            autocomplete="off"
+                            autocorrect="off"
+                            autocapitalize="off"
+                            spellcheck="false"
+                        >
+                        <button id="searchBtn" class="search-button" type="button">
+                            <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="search-tips">
+                    <p><i class="fas fa-info-circle"></i> Examples: 1J0698151, 5N0698151, 1K0698151</p>
+                </div>
+            </div>
+
+            <div id="loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Searching for analogs...</p>
+            </div>
+
+            <div id="results" class="results-container hidden">
+                <div id="resultsContent"></div>
+            </div>
+
+            <div id="error" class="error-container hidden">
+                <div class="error-message">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span id="errorText"></span>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>Data updates automatically from Google Sheets</p>
+        </footer>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('partNumber');
+            const searchBtn = document.getElementById('searchBtn');
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+            const resultsContent = document.getElementById('resultsContent');
+            const error = document.getElementById('error');
+            const errorText = document.getElementById('errorText');
+
+            // Функция для скрытия всех состояний
+            function hideAllStates() {
+                loading.classList.add('hidden');
+                results.classList.add('hidden');
+                error.classList.add('hidden');
+            }
+
+            // Функция для показа загрузки
+            function showLoading() {
+                hideAllStates();
+                loading.classList.remove('hidden');
+            }
+
+            // Функция для показа ошибки
+            function showError(message) {
+                hideAllStates();
+                errorText.textContent = message;
+                error.classList.remove('hidden');
+            }
+
+            // Функция для показа результатов
+            function showResults(data) {
+                hideAllStates();
+                
+                if (!data.results || data.results.length === 0) {
+                    resultsContent.innerHTML = `
+                        <div class="result-group">
+                            <div class="result-main">
+                                <i class="fas fa-info-circle"></i>
+                                ${data.message}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    let html = '';
+                    
+                    data.results.forEach((group, index) => {
+                        html += `
+                            <div class="result-group">
+                                <div class="result-main">
+                                    <i class="fas fa-link"></i>
+                                    Part Number: ${group.main_part}
+                                    <span class="section-badge">${group.section || 'Unknown'}</span>
+                                </div>
+                                <div class="result-details">
+                        `;
+                        
+                        // Отображаем OE analogue
+                        if (group.oe_analogue) {
+                            html += `
+                                <div class="detail-row">
+                                    <span class="detail-label">OE analogue:</span>
+                                    <span class="detail-value">${group.oe_analogue}</span>
+                                </div>
+                            `;
+                        }
+                        
+                        // Отображаем Not Original
+                        if (group.not_original) {
+                            html += `
+                                <div class="detail-row">
+                                    <span class="detail-label">Not Original:</span>
+                                    <span class="detail-value">${group.not_original}</span>
+                                </div>
+                            `;
+                        }
+                        
+                        html += `
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    resultsContent.innerHTML = html;
+                }
+                
+                results.classList.remove('hidden');
+            }
+
+            // Функция для выполнения поиска
+            async function performSearch() {
+                const partNumber = searchInput.value.trim();
+                
+                if (!partNumber) {
+                    showError('Please enter a part number to search');
+                    return;
+                }
+
+                showLoading();
+
+                try {
+                    const response = await fetch('/search-brake-pads', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ part_number: partNumber })
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Произошла ошибка при поиске');
+                    }
+
+                    showResults(data);
+
+                } catch (err) {
+                    console.error('Ошибка поиска:', err);
+                    showError(err.message || 'An error occurred during search. Please try again.');
+                }
+            }
+
+            // Обработчик клика по кнопке поиска
+            searchBtn.addEventListener('click', performSearch);
+
+            // Обработчик нажатия Enter в поле ввода
+            searchInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    performSearch();
+                }
+            });
+
+            // Фокус на поле ввода при загрузке страницы (только на десктопе)
+            if (window.innerWidth > 768) {
+                searchInput.focus();
+            }
+
+            // Добавляем анимацию при вводе
+            searchInput.addEventListener('input', function() {
+                if (this.value.trim()) {
+                    searchBtn.style.transform = 'scale(1.05)';
+                } else {
+                    searchBtn.style.transform = 'scale(1)';
+                }
+            });
+
+            // Плавная анимация для кнопки
+            searchBtn.addEventListener('mouseenter', function() {
+                if (searchInput.value.trim()) {
+                    this.style.transform = 'scale(1.05) translateY(-2px)';
+                }
+            });
+
+            searchBtn.addEventListener('mouseleave', function() {
+                if (searchInput.value.trim()) {
+                    this.style.transform = 'scale(1.05)';
+                } else {
+                    this.style.transform = 'scale(1)';
+                }
+            });
+
+            // Add input hints
+            const examples = ['1J0698151', '5N0698151', '1K0698151', '5N0698151A'];
+            let currentExampleIndex = 0;
+
+            searchInput.addEventListener('focus', function() {
+                if (!this.value) {
+                    this.placeholder = `Enter part number (e.g., ${examples[currentExampleIndex]})`;
+                }
+            });
+
+            // Меняем примеры каждые 3 секунды
+            setInterval(() => {
+                if (document.activeElement !== searchInput || searchInput.value) {
+                    currentExampleIndex = (currentExampleIndex + 1) % examples.length;
+                    if (!searchInput.value) {
+                        searchInput.placeholder = `Enter part number (e.g., ${examples[currentExampleIndex]})`;
+                    }
+                }
+            }, 3000);
+
+            // Mobile-specific improvements
+            function initMobileFeatures() {
+                // Prevent zoom on input focus (iOS)
+                const inputs = document.querySelectorAll('input[type="text"]');
+                inputs.forEach(input => {
+                    input.addEventListener('focus', function() {
+                        if (window.innerWidth <= 768) {
+                            setTimeout(() => {
+                                this.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }, 300);
+                        }
+                    });
+                });
+
+                // Add touch feedback
+                const buttons = document.querySelectorAll('button');
+                buttons.forEach(button => {
+                    button.addEventListener('touchstart', function() {
+                        this.style.transform = 'scale(0.95)';
+                    });
+                    
+                    button.addEventListener('touchend', function() {
+                        this.style.transform = '';
+                    });
+                });
+
+                // Improve scrolling on mobile
+                document.body.style.webkitOverflowScrolling = 'touch';
+            }
+
+            // Initialize mobile features
+            initMobileFeatures();
+        });
+    </script>
+</body>
+</html>

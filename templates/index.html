@@ -18,8 +18,47 @@
     <link rel="icon" type="image/png" sizes="16x16" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    
+    <style>
+        .nav-link {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            text-decoration: none;
+            font-size: 1.1rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 25px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        @media (max-width: 768px) {
+            .nav-link {
+                top: 15px;
+                right: 15px;
+                font-size: 1rem;
+                padding: 8px 12px;
+            }
+        }
+    </style>
 </head>
 <body>
+    <a href="/brake-pads" class="nav-link">
+        Brake Pads
+        <i class="fas fa-arrow-right"></i>
+    </a>
+    
     <div class="container">
         <header class="header">
             <div class="logo">
