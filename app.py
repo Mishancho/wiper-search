@@ -64,11 +64,9 @@ def get_google_sheets_data():
 def get_brake_pads_data():
     """Получает данные из Google Sheets с информацией о тормозных колодках"""
     try:
-        # Используем service account credentials
-        credentials = Credentials.from_service_account_file(
-            'service-account-key.json', 
-            scopes=SCOPES
-        )
+        # Загружаем JSON ключ из переменной окружения
+        service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY"))
+        credentials = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
         
         client = gspread.authorize(credentials)
         

@@ -64,6 +64,7 @@ service-account-key.json
 *.json
 !package.json
 !manifest.json
+!env.example
 
 # Temporary files
 *.tmp
