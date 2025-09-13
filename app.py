@@ -16,8 +16,13 @@ SCOPES = [
 def get_google_sheets_data():
     """Получает данные из Google Sheets с информацией о типе щёток"""
     try:
+        # Проверяем наличие переменной окружения
+        service_account_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+        if not service_account_key:
+            raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY не установлен в переменной окружения")
+        
         # Загружаем JSON ключ из переменной окружения
-        service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY"))
+        service_account_info = json.loads(service_account_key)
         credentials = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
         
         client = gspread.authorize(credentials)
@@ -64,8 +69,13 @@ def get_google_sheets_data():
 def get_brake_pads_data():
     """Получает данные из Google Sheets с информацией о тормозных колодках"""
     try:
+        # Проверяем наличие переменной окружения
+        service_account_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+        if not service_account_key:
+            raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY не установлен в переменной окружения")
+        
         # Загружаем JSON ключ из переменной окружения
-        service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY"))
+        service_account_info = json.loads(service_account_key)
         credentials = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
         
         client = gspread.authorize(credentials)
@@ -73,7 +83,7 @@ def get_brake_pads_data():
         # Получаем ID таблицы из переменной окружения
         spreadsheet_id = os.getenv('GOOGLE_SHEETS_ID')
         if not spreadsheet_id:
-            raise ValueError("GOOGLE_SHEETS_ID не установлен в .env файле")
+            raise ValueError("GOOGLE_SHEETS_ID не установлен в переменной окружения")
         
         # Открываем таблицу
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -340,7 +350,24 @@ def search_brake_pads():
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok'})
+    """Проверка состояния приложения"""
+    try:
+        # Проверяем наличие необходимых переменных окружения
+        env_status = {
+            'GOOGLE_SHEETS_ID': bool(os.getenv('GOOGLE_SHEETS_ID')),
+            'GOOGLE_SERVICE_ACCOUNT_KEY': bool(os.getenv('GOOGLE_SERVICE_ACCOUNT_KEY'))
+        }
+        
+        return jsonify({
+            'status': 'ok',
+            'environment_variables': env_status,
+            'message': 'Application is running'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
