@@ -7,6 +7,16 @@ from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
+# Нормализация вводимого артикула
+def preprocess_part_number(part_number):
+    """Удаляет ведущую букву v/V из номера детали, если она есть."""
+    if not isinstance(part_number, str):
+        return ''
+    normalized = part_number.strip()
+    if normalized[:1].lower() == 'v':
+        normalized = normalized[1:]
+    return normalized
+
 # Настройка Google Sheets API
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -287,7 +297,7 @@ def brake_pads():
 def search():
     try:
         data = request.get_json()
-        part_number = data.get('part_number', '').strip()
+        part_number = preprocess_part_number(data.get('part_number', ''))
         
         if not part_number:
             return jsonify({'error': 'Part number not specified'}), 400
@@ -318,7 +328,7 @@ def search_brake_pads():
     """API endpoint для поиска аналогов тормозных колодок"""
     try:
         data = request.get_json()
-        part_number = data.get('part_number', '').strip()
+        part_number = preprocess_part_number(data.get('part_number', ''))
         
         if not part_number:
             return jsonify({'error': 'Part number not specified'}), 400
