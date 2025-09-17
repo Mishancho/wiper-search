@@ -161,17 +161,32 @@ def normalize_data(raw_data):
             section = item.get('section', 'Unknown')
             
             if main_part and alt_parts_str:
-                alt_parts_str = alt_parts_str.replace('(', '/').replace(')', '/')
-                alt_parts = re.split(r'[/,\s]+', alt_parts_str)
+                # 1) Удаляем любые пометки в скобках полностью: (change mounting), (note) и т.п.
+                alt_parts_clean = re.sub(r"\([^)]*\)", "", alt_parts_str)
+                # 2) Разделяем по '/', ',', пробелам
+                raw_tokens = re.split(r'[/,\s]+', alt_parts_clean)
                 
-                for alt_part in alt_parts:
-                    alt_part = alt_part.strip()
-                    if alt_part:
-                        normalized_data.append({
-                            'main_part': main_part,
-                            'alt_part': alt_part,
-                            'section': section
-                        })
+                # Добавляем сам основной артикул как альтернативу для корректной работы префиксного поиска
+                normalized_data.append({
+                    'main_part': main_part,
+                    'alt_part': main_part,
+                    'section': section
+                })
+
+                for alt_part in raw_tokens:
+                    token = alt_part.strip()
+                    if not token:
+                        continue
+                    # 3) Оставляем только артикулы: латиница/цифры без пробелов, обязательно содержит хотя бы одну цифру
+                    if not re.fullmatch(r'[A-Za-z0-9]+', token):
+                        continue
+                    if not re.search(r'\d', token):
+                        continue
+                    normalized_data.append({
+                        'main_part': main_part,
+                        'alt_part': token,
+                        'section': section
+                    })
     
     return normalized_data
 
@@ -339,6 +354,15 @@ def search():
         
         normalized_data = normalize_data(raw_data)
         results = search_analogs(part_number, normalized_data)
+        
+        # Если точных совпадений нет, а длина запроса >= 3 — пробуем префиксный поиск
+        if not results and len(part_number.strip()) >= 3:
+            prefix_results = search_by_prefix(part_number, normalized_data)
+            if prefix_results:
+                return jsonify({
+                    'message': f'Found results for prefix "{part_number[:3].upper()}":',
+                    'results': prefix_results
+                })
         
         if not results:
             return jsonify({
