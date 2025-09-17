@@ -84,6 +84,7 @@ document.addEventListener('DOMContentLoaded', function() {
         showLoading();
 
         try {
+            // 1) Точный поиск
             const response = await fetch('/search', {
                 method: 'POST',
                 headers: {
@@ -96,6 +97,31 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (!response.ok) {
                 throw new Error(data.error || 'Произошла ошибка при поиске');
+            }
+
+            // Если ничего не найдено, пробуем поиск по префиксу (первые 3 символа)
+            if ((!data.results || data.results.length === 0) && partNumber.length >= 3) {
+                try {
+                    const prefixResponse = await fetch('/search-prefix', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ part_prefix: partNumber })
+                    });
+
+                    const prefixData = await prefixResponse.json();
+
+                    if (!prefixResponse.ok) {
+                        throw new Error(prefixData.error || 'Произошла ошибка при поиске по префиксу');
+                    }
+
+                    showResults(prefixData);
+                    return;
+                } catch (prefixErr) {
+                    console.error('Ошибка префиксного поиска:', prefixErr);
+                    // Если префиксный поиск тоже упал — покажем исходный результат/сообщение
+                }
             }
 
             showResults(data);
