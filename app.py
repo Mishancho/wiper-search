@@ -250,6 +250,37 @@ def search_analogs(part_number, data):
     
     return result
 
+def search_by_prefix(part_prefix, data):
+    """Ищет группы по первым 3 символам артикула (без учета регистра)."""
+    prefix = part_prefix.upper().strip()
+    if len(prefix) < 3:
+        return []
+    prefix = prefix[:3]
+    found_groups = {}
+    
+    for item in data:
+        main = item['main_part']
+        alt = item['alt_part']
+        section = item.get('section', 'Unknown')
+        if main.upper().startswith(prefix) or alt.upper().startswith(prefix):
+            if main not in found_groups:
+                found_groups[main] = {
+                    'parts': set(),
+                    'section': section
+                }
+            found_groups[main]['parts'].add(alt)
+            found_groups[main]['parts'].add(main)
+    
+    result = []
+    for main_part, group_info in found_groups.items():
+        parts_list = sorted(list(group_info['parts']))
+        result.append({
+            'main_part': main_part,
+            'all_parts': parts_list,
+            'section': group_info['section']
+        })
+    return result
+
 def search_brake_pads_analogs(part_number, data):
     """Ищет аналоги тормозных колодок для заданного артикула"""
     part_number = part_number.upper().strip()
@@ -320,6 +351,35 @@ def search():
             'results': results
         })
         
+    except Exception as e:
+        return jsonify({'error': f'Search error: {str(e)}'}), 500
+
+@app.route('/search-prefix', methods=['POST'])
+def search_prefix():
+    """Ищет запчасти по первым 3 символам артикула (case-insensitive)."""
+    try:
+        data = request.get_json()
+        part_prefix = preprocess_part_number(data.get('part_prefix', ''))
+        if not part_prefix or len(part_prefix.strip()) < 3:
+            return jsonify({'error': 'Part prefix must be at least 3 characters'}), 400
+        
+        raw_data = get_google_sheets_data()
+        if not raw_data:
+            return jsonify({'error': 'Failed to get data from table'}), 500
+        
+        normalized_data = normalize_data(raw_data)
+        results = search_by_prefix(part_prefix, normalized_data)
+        
+        if not results:
+            return jsonify({
+                'message': f'No results for prefix "{part_prefix[:3].upper()}"',
+                'results': []
+            })
+        
+        return jsonify({
+            'message': f'Found results for prefix "{part_prefix[:3].upper()}":',
+            'results': results
+        })
     except Exception as e:
         return jsonify({'error': f'Search error: {str(e)}'}), 500
 
