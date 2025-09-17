@@ -17,6 +17,13 @@ def preprocess_part_number(part_number):
         normalized = normalized[1:]
     return normalized
 
+# Приведение строк к единообразному виду для сопоставления
+def normalize_token_for_match(value):
+    """Uppercase + удаление всех неалфанумерик символов (пробелы, дефисы и т.п.)."""
+    if not isinstance(value, str):
+        return ''
+    return re.sub(r'[^A-Za-z0-9]', '', value).upper().strip()
+
 # Настройка Google Sheets API
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -235,12 +242,13 @@ def normalize_brake_pads_data(raw_data):
 
 def search_analogs(part_number, data):
     """Ищет аналоги для заданного артикула"""
-    part_number = part_number.upper().strip()
+    part_number_norm = normalize_token_for_match(part_number)
     found_groups = {}
     
     for item in data:
-        if (item['main_part'].upper() == part_number or 
-            item['alt_part'].upper() == part_number):
+        main_norm = normalize_token_for_match(item['main_part'])
+        alt_norm = normalize_token_for_match(item['alt_part'])
+        if (main_norm == part_number_norm or alt_norm == part_number_norm):
             
             main_part = item['main_part']
             section = item.get('section', 'Unknown')
@@ -267,7 +275,7 @@ def search_analogs(part_number, data):
 
 def search_by_prefix(part_prefix, data):
     """Ищет группы по первым 3 символам артикула (без учета регистра)."""
-    prefix = part_prefix.upper().strip()
+    prefix = normalize_token_for_match(part_prefix)
     if len(prefix) < 3:
         return []
     prefix = prefix[:3]
@@ -277,7 +285,7 @@ def search_by_prefix(part_prefix, data):
         main = item['main_part']
         alt = item['alt_part']
         section = item.get('section', 'Unknown')
-        if main.upper().startswith(prefix) or alt.upper().startswith(prefix):
+        if normalize_token_for_match(main).startswith(prefix) or normalize_token_for_match(alt).startswith(prefix):
             if main not in found_groups:
                 found_groups[main] = {
                     'parts': set(),
