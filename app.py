@@ -31,7 +31,7 @@ SCOPES = [
 ]
 
 def get_google_sheets_data():
-    """Получает данные из Google Sheets с информацией о типе щёток"""
+    """Получает данные из Google Sheets с информацией о щетках стеклоочистителей"""
     try:
         # Проверяем наличие переменной окружения
         service_account_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
@@ -56,6 +56,12 @@ def get_google_sheets_data():
         
         for worksheet in spreadsheet.worksheets():
             try:
+                worksheet_title = worksheet.title.lower()
+                
+                # Пропускаем листы с тормозными колодками
+                if any(keyword in worksheet_title for keyword in ['brake', 'pad', 'тормоз']):
+                    continue
+                
                 data = worksheet.get_all_values()
                 current_section = None
                 
@@ -67,7 +73,9 @@ def get_google_sheets_data():
                         elif 'back wipers' in row[0].lower():
                             current_section = 'Back Wipers'
                         elif len(row) >= 2 and row[0].strip() and row[1].strip():
-                            if not any(keyword in row[0].lower() for keyword in ['wipers', 'front', 'back']):
+                            # Проверяем, что это не данные о тормозных колодках
+                            if (not any(keyword in row[0].lower() for keyword in ['wipers', 'front', 'back', 'brake', 'pad', 'тормоз']) and
+                                not any(keyword in row[1].lower() for keyword in ['brake', 'pad', 'тормоз'])):
                                 all_data.append({
                                     'main_part': row[0].strip(),
                                     'alt_parts': row[1].strip(),
@@ -110,22 +118,28 @@ def get_brake_pads_data():
         
         for worksheet in spreadsheet.worksheets():
             try:
+                worksheet_title = worksheet.title.lower()
+                
+                # Пропускаем листы со щетками стеклоочистителей
+                if any(keyword in worksheet_title for keyword in ['wiper', 'wipe', 'щетк']):
+                    continue
+                
                 data = worksheet.get_all_values()
-                worksheet_title = worksheet.title
+                current_section = None
                 
                 # Определяем тип тормозных колодок по названию листа
-                if 'front' in worksheet_title.lower() and ('brake' in worksheet_title.lower() or 'pad' in worksheet_title.lower()):
+                if 'front' in worksheet_title and ('brake' in worksheet_title or 'pad' in worksheet_title):
                     current_section = 'Front Brake Pads'
-                elif ('back' in worksheet_title.lower() or 'rear' in worksheet_title.lower()) and ('brake' in worksheet_title.lower() or 'pad' in worksheet_title.lower()):
+                elif ('back' in worksheet_title or 'rear' in worksheet_title) and ('brake' in worksheet_title or 'pad' in worksheet_title):
                     current_section = 'Rear Brake Pads'
                 else:
-                    current_section = worksheet_title  # Используем название листа как есть
+                    current_section = worksheet.title  # Используем название листа как есть
                 
                 # Определяем тип тормозных колодок по содержимому листа
                 for row in data:
                     if len(row) > 0 and row[0].strip():
                         # Определяем секцию по заголовкам (если не определили по названию листа)
-                        if current_section == worksheet_title:
+                        if current_section == worksheet.title:
                             if 'front brake' in row[0].lower() or 'front pads' in row[0].lower():
                                 current_section = 'Front Brake Pads'
                             elif 'back brake' in row[0].lower() or 'rear brake' in row[0].lower() or 'back pads' in row[0].lower() or 'rear pads' in row[0].lower():
@@ -133,7 +147,10 @@ def get_brake_pads_data():
                         
                         if len(row) >= 3 and row[0].strip():
                             # Проверяем, что это не заголовок и есть данные в колонках
-                            if (not any(keyword in row[0].lower() for keyword in ['brake', 'pads', 'front', 'back', 'rear', 'part number', 'oe analogue', 'not original']) and
+                            # Исключаем данные о щетках стеклоочистителей
+                            if (not any(keyword in row[0].lower() for keyword in ['brake', 'pads', 'front', 'back', 'rear', 'part number', 'oe analogue', 'not original', 'wiper', 'wipe', 'щетк']) and
+                                not any(keyword in row[1].lower() for keyword in ['wiper', 'wipe', 'щетк']) and
+                                not any(keyword in row[2].lower() for keyword in ['wiper', 'wipe', 'щетк']) and
                                 row[0].strip() and (row[1].strip() or row[2].strip())):
                                 
                                 # Сохраняем отдельно OE analogue и Not Original
