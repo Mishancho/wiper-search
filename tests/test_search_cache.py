@@ -46,7 +46,9 @@ class SearchCacheTests(unittest.TestCase):
         cache = SearchCache(loader=snapshot)
 
         self.assertTrue(cache.refresh_once())
-        self.assertEqual(cache.search_wipers("W1-ALT")[0]["main_part"], "WIPER-100")
+        exact_result = cache.search_wipers("W1-ALT")[0]
+        self.assertEqual(exact_result["main_part"], "WIPER-100")
+        self.assertEqual(exact_result["all_parts"], ["W1ALT", "WIPER-100"])
         self.assertEqual(
             [group["main_part"] for group in cache.search_wipers("W1-ALT")],
             ["WIPER-100", "WIPER-200"],
@@ -54,6 +56,10 @@ class SearchCacheTests(unittest.TestCase):
         self.assertEqual(
             [group["main_part"] for group in cache.search_wiper_prefix("wip")],
             ["WIPER-100", "WIPER-200"],
+        )
+        self.assertEqual(
+            cache.search_wiper_prefix("W1A")[0]["all_parts"],
+            ["W1ALT", "WIPER-100"],
         )
         brake_result = cache.search_brake_pads("P-ALT")[0]
         self.assertEqual(brake_result["main_part"], "PAD-200")

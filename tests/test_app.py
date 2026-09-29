@@ -57,6 +57,10 @@ class SearchEndpointTests(unittest.TestCase):
         self.assertEqual(exact_response.status_code, 200)
         self.assertEqual(prefix_response.status_code, 200)
         self.assertEqual(exact_response.get_json()["results"][0]["main_part"], "WIPER-100")
+        self.assertEqual(
+            exact_response.get_json()["results"][0]["all_parts"],
+            ["W1ALT", "WIPER-100"],
+        )
         self.assertEqual(prefix_response.get_json()["results"][0]["main_part"], "2GM-900")
         self.assertEqual(self.calls, 1)
 

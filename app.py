@@ -256,46 +256,62 @@ def normalize_brake_pads_data(raw_data):
 
 
 def _build_wiper_indexes(normalized_data):
-    groups = OrderedDict()
-    for item in normalized_data:
+    """Indexes results without changing the legacy per-query all_parts payload."""
+    exact_groups = defaultdict(OrderedDict)
+    prefix_groups = defaultdict(OrderedDict)
+
+    def add_match(index, key, item):
+        if not key:
+            return
         main_part = item["main_part"]
-        group = groups.setdefault(
+        group = index[key].setdefault(
             main_part,
-            {"main_part": main_part, "section": item.get("section", "Unknown"), "parts": set()},
+            {
+                "main_part": main_part,
+                "section": item.get("section", "Unknown"),
+                "parts": set(),
+            },
         )
         group["parts"].add(main_part)
         group["parts"].add(item["alt_part"])
 
-    exact_index = defaultdict(list)
-    prefix_index = defaultdict(list)
-    for group in groups.values():
-        result_group = MappingProxyType(
-            {
-                "main_part": group["main_part"],
-                "all_parts": tuple(sorted(group["parts"])),
-                "section": group["section"],
-            }
-        )
-        for part in group["parts"]:
-            token = normalize_token_for_match(part)
-            if token:
-                exact_index[token].append(result_group)
-            if len(token) >= 3:
-                prefix_index[token[:3]].append(result_group)
+    for item in normalized_data:
+        main_token = normalize_token_for_match(item["main_part"])
+        alt_token = normalize_token_for_match(item["alt_part"])
+
+        # The legacy exact search matches every row of a group when its main part
+        # matches, but only the matching row when an alternative matches.
+        add_match(exact_groups, main_token, item)
+        if alt_token != main_token:
+            add_match(exact_groups, alt_token, item)
+
+        # Prefix search has the same row-by-row semantics. Only the first three
+        # normalized characters are part of the public endpoint contract.
+        candidate_prefixes = {
+            token[:3] for token in (main_token, alt_token) if len(token) >= 3
+        }
+        for prefix in candidate_prefixes:
+            if main_token.startswith(prefix) or alt_token.startswith(prefix):
+                add_match(prefix_groups, prefix, item)
 
     def freeze(index):
-        frozen = {}
-        for key, values in index.items():
-            unique = []
-            seen = set()
-            for group in values:
-                if group["main_part"] not in seen:
-                    seen.add(group["main_part"])
-                    unique.append(group)
-            frozen[key] = tuple(unique)
-        return MappingProxyType(frozen)
+        return MappingProxyType(
+            {
+                key: tuple(
+                    MappingProxyType(
+                        {
+                            "main_part": group["main_part"],
+                            "all_parts": tuple(sorted(group["parts"])),
+                            "section": group["section"],
+                        }
+                    )
+                    for group in groups.values()
+                )
+                for key, groups in index.items()
+            }
+        )
 
-    return freeze(exact_index), freeze(prefix_index)
+    return freeze(exact_groups), freeze(prefix_groups)
 
 
 def _public_wiper_results(groups):
