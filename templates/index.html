@@ -1,122 +1,100 @@
+{% set is_brake_pads = is_brake_pads|default(false) %}
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#667eea">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="{{ '#4a5568' if is_brake_pads else '#667eea' }}">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="Wiper Search">
+    <meta name="apple-mobile-web-app-title" content="Поиск аналогов">
     <meta name="mobile-web-app-capable" content="yes">
-    <title>Wiper Blades Search</title>
+    <title>Поиск аналогов — {{ 'тормозные колодки' if is_brake_pads else 'дворники' }}</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    
-    <!-- Mobile Icons -->
-    <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
-    <link rel="icon" type="image/png" sizes="16x16" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
-    
-    <style>
-        .nav-link {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            color: white;
-            text-decoration: none;
-            font-size: 1.1rem;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 15px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 25px;
-            backdrop-filter: blur(10px);
-            transition: all 0.3s ease;
-        }
-        
-        .nav-link:hover {
-            background: rgba(255, 255, 255, 0.2);
-            transform: translateY(-2px);
-        }
-        
-        @media (max-width: 768px) {
-            .nav-link {
-                top: 15px;
-                right: 15px;
-                font-size: 1rem;
-                padding: 8px 12px;
-            }
-        }
-    </style>
 </head>
-<body>
-    <a href="/brake-pads" class="nav-link">
-        Brake Pads
-        <i class="fas fa-arrow-right"></i>
-    </a>
-    
+<body{% if is_brake_pads %} class="brake-pads"{% endif %}>
     <div class="container">
         <header class="header">
             <div class="logo">
-                <i class="fas fa-search"></i>
-                <h1>Wiper Blades Search</h1>
+                <i class="fas fa-search" aria-hidden="true"></i>
+                <h1>Поиск аналогов</h1>
             </div>
-            <p class="subtitle">Find interchangeable wiper blade part numbers</p>
+            <p class="subtitle">Дворники и тормозные колодки — поиск по артикулу</p>
         </header>
 
         <main class="main">
             <div class="search-container">
-                <div class="search-box">
+                <nav class="category-nav" aria-label="Категория поиска">
+                    <a href="/"{% if not is_brake_pads %} aria-current="page"{% endif %}>Дворники</a>
+                    <a href="/brake-pads"{% if is_brake_pads %} aria-current="page"{% endif %}>Тормозные колодки</a>
+                </nav>
+                <form id="searchForm" class="search-box" data-search-endpoint="{{ '/search-brake-pads' if is_brake_pads else '/search' }}">
+                    <label for="partNumber" class="visually-hidden">Артикул для поиска</label>
                     <div class="search-input-wrapper">
-                        <i class="fas fa-search search-icon"></i>
-                        <input 
-                            type="text" 
-                            id="partNumber" 
-                            placeholder="Enter part number (e.g., 6R1998002, 5E1, 1S1...)"
+                        <i class="fas fa-search search-icon" aria-hidden="true"></i>
+                        <input
+                            type="text"
+                            id="partNumber"
+                            name="part_number"
+                            placeholder="Артикул, например {{ '1J0698151' if is_brake_pads else '6R1998002' }}"
                             class="search-input"
+                            aria-describedby="searchTips"
                             autocomplete="off"
                             autocorrect="off"
                             autocapitalize="off"
                             spellcheck="false"
                         >
-                        <button id="searchBtn" class="search-button" type="button">
-                            <i class="fas fa-arrow-right"></i>
+                        <button id="searchBtn" class="search-button" type="submit">
+                            Найти <i class="fas fa-arrow-right" aria-hidden="true"></i>
                         </button>
                     </div>
-                </div>
-                
-                <div class="search-tips">
-                    <p><i class="fas fa-info-circle"></i> Examples: 6R1998002, 5E1, 1S1, 5JB</p>
-                </div>
+                </form>
+                <p id="searchTips" class="search-tips">
+                    <i class="fas fa-info-circle" aria-hidden="true"></i>
+                    Примеры: {{ '1J0698151, 5N0698151, 1K0698151' if is_brake_pads else '6R1998002, 5E1, 1S1, 5JB' }}
+                </p>
+                <div id="notifications" class="notifications" role="status" aria-live="polite" aria-atomic="true"></div>
             </div>
 
-            <div id="loading" class="loading hidden">
-                <div class="spinner"></div>
-                <p>Searching for analogs...</p>
-            </div>
+            <section id="favorites" class="personal-section" aria-labelledby="favoritesTitle" hidden>
+                <h2 id="favoritesTitle">Избранное</h2>
+                <div id="favoritesContent" class="personal-items"></div>
+            </section>
+            <section id="recent" class="personal-section" aria-labelledby="recentTitle" hidden>
+                <h2 id="recentTitle">Недавние</h2>
+                <div id="recentContent" class="personal-items"></div>
+            </section>
 
-            <div id="results" class="results-container hidden">
+            <div id="loading" class="loading hidden" role="status" aria-live="polite">
+                <div class="spinner" aria-hidden="true"></div>
+                <p>Ищем аналоги…</p>
+            </div>
+            <section id="results" class="results-container hidden" aria-label="Результаты поиска" aria-live="polite">
                 <div id="resultsContent"></div>
-            </div>
-
-            <div id="error" class="error-container hidden">
+            </section>
+            <div id="error" class="error-container hidden" role="alert">
                 <div class="error-message">
-                    <i class="fas fa-exclamation-triangle"></i>
+                    <i class="fas fa-exclamation-triangle" aria-hidden="true"></i>
                     <span id="errorText"></span>
                 </div>
             </div>
+
+            <details id="notFound" class="personal-section" hidden>
+                <summary>Не найдено в базе</summary>
+                <div id="notFoundContent" class="personal-items"></div>
+            </details>
         </main>
 
         <footer class="footer">
-            <p>Data updates automatically from Google Sheets</p>
-            <p class="developer-credit">Developed by Mikhail Vorokhovskii</p>
+            <p>Данные автоматически обновляются из Google Sheets</p>
+            <p class="developer-credit">Разработчик — Михаил Вороховский</p>
         </footer>
     </div>
-
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

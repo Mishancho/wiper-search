@@ -1,7 +1,7 @@
 {
-  "name": "Wiper Blades Search",
-  "short_name": "Wiper Search",
-  "description": "Find interchangeable wiper blade part numbers",
+  "name": "Поиск аналогов дворников и тормозных колодок",
+  "short_name": "Поиск аналогов",
+  "description": "Аналоги дворников и тормозных колодок по артикулу",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#667eea",
@@ -20,5 +20,5 @@
     }
   ],
   "categories": ["utilities", "automotive"],
-  "lang": "en"
+  "lang": "ru"
 }

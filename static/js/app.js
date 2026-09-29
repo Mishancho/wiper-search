@@ -1,239 +1,157 @@
 document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('partNumber');
-    const searchBtn = document.getElementById('searchBtn');
+    const searchForm = document.getElementById('searchForm');
+    const searchEndpoint = searchForm.dataset.searchEndpoint;
     const loading = document.getElementById('loading');
     const results = document.getElementById('results');
     const resultsContent = document.getElementById('resultsContent');
     const error = document.getElementById('error');
     const errorText = document.getElementById('errorText');
 
-    // Функция для скрытия всех состояний
+    const sectionNames = {
+        'front wipers': 'Передние дворники',
+        'back wipers': 'Задние дворники',
+        'rear wipers': 'Задние дворники',
+        'wipers': 'Дворники',
+        'front brake pads': 'Передние тормозные колодки',
+        'rear brake pads': 'Задние тормозные колодки',
+        'back brake pads': 'Задние тормозные колодки',
+        'brake pads': 'Тормозные колодки'
+    };
+
+    function sectionLabel(section) {
+        const key = String(section || '').trim().toLowerCase();
+        return Object.prototype.hasOwnProperty.call(sectionNames, key) ? sectionNames[key] : 'Без секции';
+    }
+
     function hideAllStates() {
         loading.classList.add('hidden');
         results.classList.add('hidden');
         error.classList.add('hidden');
     }
 
-    // Функция для показа загрузки
     function showLoading() {
         hideAllStates();
         loading.classList.remove('hidden');
     }
 
-    // Функция для показа ошибки
     function showError(message) {
         hideAllStates();
         errorText.textContent = message;
         error.classList.remove('hidden');
     }
 
-    // Функция для показа результатов
-    function showResults(data) {
+    function element(tag, className, text) {
+        const node = document.createElement(tag);
+        node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    }
+
+    function showResults(data, partNumber) {
         hideAllStates();
-        
+        resultsContent.replaceChildren();
+
         if (!data.results || data.results.length === 0) {
-            resultsContent.innerHTML = `
-                <div class="result-group">
-                    <div class="result-main">
-                        <i class="fas fa-info-circle"></i>
-                        ${data.message}
-                    </div>
-                </div>
-            `;
+            const group = element('div', 'result-group');
+            group.append(element('p', 'empty-result', `Артикул «${partNumber}» не найден в базе.`));
+            resultsContent.append(group);
         } else {
-            let html = '';
-            
-            data.results.forEach((group, index) => {
-                html += `
-                    <div class="result-group">
-                        <div class="result-main">
-                            <i class="fas fa-link"></i>
-                            Main Part: ${group.main_part}
-                            <span class="section-badge">${group.section || 'Unknown'}</span>
-                        </div>
-                        <div class="result-parts">
-                `;
-                
-                group.all_parts.forEach(part => {
-                    const isHighlighted = part.toUpperCase() === searchInput.value.toUpperCase();
-                    const badgeClass = isHighlighted ? 'part-badge highlighted' : 'part-badge';
-                    html += `<span class="${badgeClass}">${part}</span>`;
-                });
-                
-                html += `
-                        </div>
-                    </div>
-                `;
+            data.results.forEach(group => {
+                const card = element('div', 'result-group');
+                const heading = element('div', 'result-main');
+                heading.append(element('span', 'main-part', `Основной артикул: ${group.main_part}`));
+                heading.append(element('span', 'section-badge', sectionLabel(group.section)));
+                card.append(heading);
+
+                if (searchEndpoint === '/search-brake-pads') {
+                    const details = element('div', 'result-details');
+                    [
+                        ['Оригинальный аналог', group.oe_analogue],
+                        ['Неоригинальные аналоги', group.not_original]
+                    ].forEach(([label, value]) => {
+                        if (!value) return;
+                        const row = element('div', 'detail-row');
+                        row.append(element('span', 'detail-label', `${label}:`));
+                        row.append(element('span', 'detail-value', value));
+                        details.append(row);
+                    });
+                    card.append(details);
+                } else {
+                    const parts = element('div', 'result-parts');
+                    group.all_parts.forEach(part => {
+                        const highlighted = part.toUpperCase() === partNumber.toUpperCase();
+                        parts.append(element('span', highlighted ? 'part-badge highlighted' : 'part-badge', part));
+                    });
+                    card.append(parts);
+                }
+                resultsContent.append(card);
             });
-            
-            resultsContent.innerHTML = html;
         }
-        
         results.classList.remove('hidden');
     }
 
-    // Функция для выполнения поиска
+    function responseError(status) {
+        if (status === 400) return 'Проверьте артикул и повторите поиск.';
+        if (status === 503) return 'База поиска ещё загружается. Повторите попытку через несколько секунд.';
+        return 'Не удалось выполнить поиск. Повторите попытку позже.';
+    }
+
     async function performSearch() {
         const partNumber = searchInput.value.trim();
-        
         if (!partNumber) {
-            showError('Please enter a part number to search');
+            showError('Введите артикул для поиска.');
             return;
         }
 
         showLoading();
-
         try {
-            // 1) Точный поиск
-            const response = await fetch('/search', {
+            const response = await fetch(searchEndpoint, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ part_number: partNumber })
             });
-
+            if (!response.ok) {
+                showError(responseError(response.status));
+                return;
+            }
             const data = await response.json();
 
-            if (!response.ok) {
-                throw new Error(data.error || 'Произошла ошибка при поиске');
-            }
-
-            // Если ничего не найдено, пробуем поиск по префиксу (первые 3 символа)
-            if ((!data.results || data.results.length === 0) && partNumber.length >= 3) {
+            // Сохраняем текущий запасной поиск по префиксу только для дворников.
+            if (searchEndpoint === '/search' && (!data.results || data.results.length === 0) && partNumber.length >= 3) {
                 try {
                     const prefixResponse = await fetch('/search-prefix', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ part_prefix: partNumber })
                     });
-
-                    const prefixData = await prefixResponse.json();
-
-                    if (!prefixResponse.ok) {
-                        throw new Error(prefixData.error || 'Произошла ошибка при поиске по префиксу');
-                    }
-
-                    showResults(prefixData);
+                    if (!prefixResponse.ok) throw new Error('Ошибка поиска по префиксу');
+                    showResults(await prefixResponse.json(), partNumber);
                     return;
-                } catch (prefixErr) {
-                    console.error('Ошибка префиксного поиска:', prefixErr);
-                    // Если префиксный поиск тоже упал — покажем исходный результат/сообщение
+                } catch (prefixError) {
+                    console.error('Ошибка поиска по префиксу:', prefixError);
                 }
             }
-
-            showResults(data);
-
+            showResults(data, partNumber);
         } catch (err) {
             console.error('Ошибка поиска:', err);
-            showError(err.message || 'An error occurred during search. Please try again.');
+            showError('Не удалось получить результаты. Проверьте подключение к сети и повторите поиск.');
         }
     }
 
-    // Обработчик клика по кнопке поиска
-    searchBtn.addEventListener('click', performSearch);
-
-    // Обработчик нажатия Enter в поле ввода
-    searchInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-            performSearch();
-        }
+    // Отправка формы работает и по Enter, и по кнопке, включая экранную клавиатуру.
+    searchForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        performSearch();
     });
 
-    // Фокус на поле ввода при загрузке страницы (только на десктопе)
-    if (window.innerWidth > 768) {
-        searchInput.focus();
-    }
+    if (window.innerWidth > 768) searchInput.focus();
 
-    // Добавляем анимацию при вводе
-    searchInput.addEventListener('input', function() {
-        if (this.value.trim()) {
-            searchBtn.style.transform = 'scale(1.05)';
-        } else {
-            searchBtn.style.transform = 'scale(1)';
-        }
-    });
-
-    // Плавная анимация для кнопки
-    searchBtn.addEventListener('mouseenter', function() {
-        if (searchInput.value.trim()) {
-            this.style.transform = 'scale(1.05) translateY(-2px)';
-        }
-    });
-
-    searchBtn.addEventListener('mouseleave', function() {
-        if (searchInput.value.trim()) {
-            this.style.transform = 'scale(1.05)';
-        } else {
-            this.style.transform = 'scale(1)';
-        }
-    });
-
-    // Add input hints
-    const examples = ['6R1998002', '5E1', '1S1', '5JB'];
-    let currentExampleIndex = 0;
-
-    searchInput.addEventListener('focus', function() {
-        if (!this.value) {
-            this.placeholder = `Enter part number (e.g., ${examples[currentExampleIndex]})`;
-        }
-    });
-
-    // Меняем примеры каждые 3 секунды
-    setInterval(() => {
-        if (document.activeElement !== searchInput || searchInput.value) {
-            currentExampleIndex = (currentExampleIndex + 1) % examples.length;
-            if (!searchInput.value) {
-                searchInput.placeholder = `Enter part number (e.g., ${examples[currentExampleIndex]})`;
-            }
-        }
-    }, 3000);
-
-    // Mobile-specific improvements
-    function initMobileFeatures() {
-        // Prevent zoom on input focus (iOS)
-        const inputs = document.querySelectorAll('input[type="text"]');
-        inputs.forEach(input => {
-            input.addEventListener('focus', function() {
-                if (window.innerWidth <= 768) {
-                    setTimeout(() => {
-                        this.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }, 300);
-                }
-            });
-        });
-
-        // Add touch feedback
-        const buttons = document.querySelectorAll('button');
-        buttons.forEach(button => {
-            button.addEventListener('touchstart', function() {
-                this.style.transform = 'scale(0.95)';
-            });
-            
-            button.addEventListener('touchend', function() {
-                this.style.transform = '';
-            });
-        });
-
-        // Improve scrolling on mobile
-        document.body.style.webkitOverflowScrolling = 'touch';
-    }
-
-    // Initialize mobile features
-    initMobileFeatures();
-
-    // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/static/sw.js')
-                .then(registration => {
-                    console.log('SW registered: ', registration);
-                })
-                .catch(registrationError => {
-                    console.log('SW registration failed: ', registrationError);
-                });
+            navigator.serviceWorker.register('/static/sw.js').catch(registrationError => {
+                console.error('Не удалось зарегистрировать Service Worker:', registrationError);
+            });
         });
     }
 });
