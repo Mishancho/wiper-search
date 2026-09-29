@@ -74,13 +74,64 @@ class SearchEndpointTests(unittest.TestCase):
         self.assertEqual(result["not_original"], "P-SECOND")
         self.assertEqual(self.calls, 1)
 
+    def test_searches_ignore_separators_and_case_but_keep_response_spelling(self):
+        for endpoint, query, expected in (
+            (
+                "/search",
+                "w i.p-e r 1.00",
+                {
+                    "main_part": "WIPER-100",
+                    "all_parts": ["W1ALT", "WIPER-100"],
+                    "section": "Front Wipers",
+                },
+            ),
+            (
+                "/search-brake-pads",
+                "p .a-l t",
+                {
+                    "main_part": "PAD-200",
+                    "oe_analogue": "P-ALT",
+                    "not_original": "P-SECOND",
+                    "section": "Front Brake Pads",
+                },
+            ),
+        ):
+            with self.subTest(endpoint=endpoint):
+                response = self.client.post(endpoint, json={"part_number": query})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    response.get_json(),
+                    {
+                        "message": f'Found analogs for part number "{query}":',
+                        "results": [expected],
+                    },
+                )
+
+    def test_empty_results_keep_current_response_contract(self):
+        for endpoint in ("/search", "/search-brake-pads"):
+            with self.subTest(endpoint=endpoint):
+                response = self.client.post(endpoint, json={"part_number": "ZZZ-999"})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    response.get_json(),
+                    {
+                        "message": 'Part number "ZZZ-999" not found in database',
+                        "results": [],
+                    },
+                )
+
     def test_search_returns_503_while_initial_snapshot_is_loading(self):
         cold_cache = SearchCache(loader=snapshot)
         app = create_app(cache=cold_cache, start_cache_on_request=False)
 
-        response = app.test_client().post("/search-brake-pads", json={"part_number": "P-ALT"})
-
-        self.assertEqual(response.status_code, 503)
+        for endpoint in ("/search", "/search-brake-pads"):
+            with self.subTest(endpoint=endpoint):
+                response = app.test_client().post(endpoint, json={"part_number": "P-ALT"})
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(
+                    response.get_json(),
+                    {"error": "Search database is still loading. Please try again shortly."},
+                )
 
     def test_health_reports_cache_status_without_refreshing(self):
         response = self.client.get("/health")

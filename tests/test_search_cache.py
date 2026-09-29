@@ -9,6 +9,10 @@ from app import (
     get_all_google_sheets_data,
     normalize_brake_pads_data,
     normalize_data,
+    normalize_token_for_match,
+    search_analogs,
+    search_brake_pads_analogs,
+    search_by_prefix,
 )
 
 
@@ -26,19 +30,107 @@ BRAKE_RAW_DATA = [
 ]
 
 
-def snapshot():
-    wiper_normalized = normalize_data(WIPER_RAW_DATA)
-    brake_normalized = normalize_brake_pads_data(BRAKE_RAW_DATA)
+def snapshot(wiper_raw=WIPER_RAW_DATA, brake_raw=BRAKE_RAW_DATA):
+    wiper_normalized = normalize_data(wiper_raw)
+    brake_normalized = normalize_brake_pads_data(brake_raw)
     wiper_exact, wiper_prefix = _build_wiper_indexes(wiper_normalized)
     return {
         "wiper_exact": wiper_exact,
         "wiper_prefix": wiper_prefix,
         "brake_exact": _build_brake_index(brake_normalized),
-        "wiper_raw_count": len(WIPER_RAW_DATA),
+        "wiper_raw_count": len(wiper_raw),
         "wiper_normalized_count": len(wiper_normalized),
-        "brake_raw_count": len(BRAKE_RAW_DATA),
+        "brake_raw_count": len(brake_raw),
         "brake_normalized_count": len(brake_normalized),
     }
+
+
+class PartNumberNormalizationTests(unittest.TestCase):
+    def test_only_case_and_approved_separators_are_ignored(self):
+        for value in ("6R1 998 002", "6R1-998-002", "6R1.998.002", "6r1998002"):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_token_for_match(value), "6R1998002")
+        for value in ("6R1/998002", "6R1_998002", "6R1+998002", "6R1\t998002", "АБ123"):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_token_for_match(value), value)
+        self.assertEqual(normalize_token_for_match(None), "")
+        self.assertEqual(normalize_token_for_match(123), "")
+        self.assertEqual(normalize_token_for_match(" .- "), "")
+
+    def test_wiper_variants_find_all_groups_and_keep_source_spelling(self):
+        raw = [
+            {"main_part": "6r1 998 002", "alt_parts": "A-100 B.200", "section": "Front Wipers"},
+            {"main_part": "Other-300", "alt_parts": "6R1.998.002", "section": "Back Wipers"},
+        ]
+        normalized = normalize_data(raw)
+        cache = SearchCache(loader=lambda: snapshot(wiper_raw=raw))
+        self.assertTrue(cache.refresh_once())
+        expected = [
+            {
+                "main_part": "6r1 998 002",
+                "all_parts": ["6r1 998 002", "A-100", "B.200"],
+                "section": "Front Wipers",
+            },
+            {
+                "main_part": "Other-300",
+                "all_parts": ["6R1.998.002", "Other-300"],
+                "section": "Back Wipers",
+            },
+        ]
+        for query in ("6R1 998 002", "6R1-998-002", "6R1.998.002", "6r1998002"):
+            with self.subTest(query=query):
+                self.assertEqual(cache.search_wipers(query), expected)
+                self.assertEqual(search_analogs(query, normalized), expected)
+        self.assertEqual(cache.search_wipers("a 1.00")[0]["all_parts"], ["6r1 998 002", "A-100"])
+        self.assertEqual(cache.search_wipers("b-200")[0]["all_parts"], ["6r1 998 002", "B.200"])
+        self.assertEqual(cache.search_wiper_prefix("6.r-1"), expected)
+        self.assertEqual(search_by_prefix("6.r-1", normalized), expected)
+
+    def test_brake_variants_find_all_groups_and_keep_source_fields(self):
+        raw = [
+            {
+                "main_part": "6r1 998 002",
+                "oe_analogue": "OE-100",
+                "not_original": "Alt.200",
+                "section": "Front Brake Pads",
+            },
+            {
+                "main_part": "Other-300",
+                "oe_analogue": "6R1.998.002",
+                "not_original": "Alt 400",
+                "section": "Rear Brake Pads",
+            },
+        ]
+        normalized = normalize_brake_pads_data(raw)
+        cache = SearchCache(loader=lambda: snapshot(brake_raw=raw))
+        self.assertTrue(cache.refresh_once())
+        for query in ("6R1 998 002", "6R1-998-002", "6R1.998.002", "6r1998002"):
+            with self.subTest(query=query):
+                self.assertEqual(cache.search_brake_pads(query), raw)
+                self.assertEqual(search_brake_pads_analogs(query, normalized), raw)
+        for query in ("oe 100", "alt-200", "ALT.400"):
+            with self.subTest(query=query):
+                self.assertTrue(cache.search_brake_pads(query))
+
+    def test_other_symbols_remain_significant_in_both_indexes(self):
+        wipers = [
+            {"main_part": "AB/123", "alt_parts": "X100", "section": "Front Wipers"},
+            {"main_part": "АБ123", "alt_parts": "X200", "section": "Back Wipers"},
+        ]
+        brakes = [
+            {"main_part": "AB/123", "oe_analogue": "AB_456", "not_original": "AB+789"},
+        ]
+        cache = SearchCache(loader=lambda: snapshot(wipers, brakes))
+        self.assertTrue(cache.refresh_once())
+        self.assertEqual(cache.search_wipers("ab/123")[0]["main_part"], "AB/123")
+        self.assertEqual(cache.search_wipers("аб123")[0]["main_part"], "АБ123")
+        for query in ("AB123", "AB456", "AB789", "AB@123"):
+            with self.subTest(query=query):
+                self.assertEqual(cache.search_wipers(query), [])
+                self.assertEqual(cache.search_brake_pads(query), [])
+        for query in ("ab/123", "ab_456", "ab+789"):
+            with self.subTest(query=query):
+                self.assertEqual(cache.search_brake_pads(query)[0]["main_part"], "AB/123")
 
 
 class SearchCacheTests(unittest.TestCase):

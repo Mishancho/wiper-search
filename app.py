@@ -41,10 +41,10 @@ def preprocess_part_number(part_number):
 
 
 def normalize_token_for_match(value):
-    """Matches the existing wiper normalization: uppercase ASCII alphanumerics only."""
+    """Ignores case, spaces, hyphens and dots while retaining every other symbol."""
     if not isinstance(value, str):
         return ""
-    return re.sub(r"[^A-Za-z0-9]", "", value).upper().strip()
+    return re.sub(r"[ .-]", "", value).upper()
 
 
 def _get_google_credentials():
@@ -204,7 +204,7 @@ def get_brake_pads_data():
 
 
 def normalize_data(raw_data):
-    """Preserves the existing wiper token filtering and main-part lookup behaviour."""
+    """Keeps source spelling and accepts separators within wiper article tokens."""
     normalized_data = []
     for item in raw_data:
         if not isinstance(item, dict) or "main_part" not in item or "alt_parts" not in item:
@@ -221,7 +221,7 @@ def normalize_data(raw_data):
         )
         for token in re.split(r"[/,\s]+", alt_parts_clean):
             token = token.strip()
-            if not token or not re.fullmatch(r"[A-Za-z0-9]+", token):
+            if not token or not re.fullmatch(r"[A-Za-z0-9.-]+", token):
                 continue
             if not re.search(r"\d", token):
                 continue
@@ -343,7 +343,7 @@ def _build_brake_index(normalized_data):
 
     index = defaultdict(list)
     for item in normalized_data:
-        token = item["alt_part"].upper().strip()
+        token = normalize_token_for_match(item["alt_part"])
         if token:
             group = groups[item["main_part"]]
             if group not in index[token]:
@@ -378,7 +378,7 @@ def search_by_prefix(part_prefix, data):
 
 def search_brake_pads_analogs(part_number, data):
     index = _build_brake_index(data)
-    return _public_brake_results(index.get(part_number.upper().strip(), ()))
+    return _public_brake_results(index.get(normalize_token_for_match(part_number), ()))
 
 
 def load_search_snapshot():
@@ -486,7 +486,9 @@ class SearchCache:
         snapshot = self._current_snapshot()
         if snapshot is None:
             return None
-        return _public_brake_results(snapshot["brake_exact"].get(part_number.upper().strip(), ()))
+        return _public_brake_results(
+            snapshot["brake_exact"].get(normalize_token_for_match(part_number), ())
+        )
 
     def has_wiper_data(self):
         snapshot = self._current_snapshot()
