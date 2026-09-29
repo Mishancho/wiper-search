@@ -53,6 +53,7 @@
                             Найти <i class="fas fa-arrow-right" aria-hidden="true"></i>
                         </button>
                     </div>
+                    <button id="favoriteInput" class="text-action" type="button" aria-pressed="false" disabled>Добавить в избранное</button>
                 </form>
                 <p id="searchTips" class="search-tips">
                     <i class="fas fa-info-circle" aria-hidden="true"></i>
@@ -66,7 +67,10 @@
                 <div id="favoritesContent" class="personal-items"></div>
             </section>
             <section id="recent" class="personal-section" aria-labelledby="recentTitle" hidden>
-                <h2 id="recentTitle">Недавние</h2>
+                <div class="personal-heading">
+                    <h2 id="recentTitle">Недавние</h2>
+                    <button id="clearRecent" class="text-action" type="button">Очистить историю</button>
+                </div>
                 <div id="recentContent" class="personal-items"></div>
             </section>
 

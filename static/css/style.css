@@ -312,6 +312,62 @@ summary:focus-visible {
     margin-top: 10px;
 }
 
+.personal-heading,
+.personal-item,
+.result-part {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.personal-heading {
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.text-action,
+.personal-search,
+.favorite-toggle {
+    font: inherit;
+    border: 1px solid #ccd2e7;
+    border-radius: 10px;
+    background: #f5f6fc;
+    color: #3f50af;
+    cursor: pointer;
+    padding: 8px 10px;
+    min-height: 44px;
+    overflow-wrap: anywhere;
+    min-width: 0;
+}
+
+#favoriteInput {
+    margin-top: 10px;
+}
+
+.favorite-toggle {
+    flex-shrink: 0;
+    font-size: 1.2rem;
+}
+
+.favorite-toggle[aria-pressed="true"] {
+    color: #735600;
+    background: #fff3c4;
+}
+
+.text-action:disabled {
+    color: #6c757d;
+    cursor: default;
+}
+
+.text-action:focus-visible,
+.personal-search:focus-visible,
+.favorite-toggle:focus-visible {
+    outline: 3px solid #263681;
+    outline-offset: 3px;
+}
+
 .notifications:not(:empty) {
     margin-top: 12px;
     padding: 10px 12px;

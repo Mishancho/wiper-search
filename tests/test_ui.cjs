@@ -62,6 +62,8 @@ async function assertContained(page) {
 
 async function checkShell(page, pagePath) {
     await page.goto(pagePath);
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
     await page.getByRole('heading', { name: 'Поиск аналогов', exact: true }).waitFor();
     assert.match(await page.locator('.subtitle').innerText(), /Дворники и тормозные колодки/);
     assert.equal(await page.locator('.category-nav [aria-current="page"]').getAttribute('href'), pagePath);
@@ -77,6 +79,7 @@ async function checkShell(page, pagePath) {
 }
 
 async function checkErrors(page, endpoint) {
+    const before = await page.locator('#recentContent').innerText();
     let calls = 0;
     let mode = 400;
     await page.route('**' + endpoint, route => {
@@ -104,7 +107,136 @@ async function checkErrors(page, endpoint) {
         assert.equal(await page.locator('#results').isVisible(), false);
     }
     assert.equal(calls, 5);
+    assert.equal(await page.locator('#recentContent').innerText(), before);
     await page.unroute('**' + endpoint);
+}
+
+const recentKey = 'part-search:recent:v1';
+const favoritesKey = 'part-search:favorites:v1';
+
+async function stored(page, key) {
+    return page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
+}
+
+async function complete(page, query) {
+    await submit(page, query);
+    await page.locator('#results').waitFor({ state: 'visible' });
+}
+
+async function checkPersonalLists(page, pagePath) {
+    await page.evaluate(() => localStorage.clear());
+    await page.goto(pagePath);
+    const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
+    const query = pagePath === '/' ? 'W1-ALT' : 'P-ALT';
+    await page.locator('#partNumber').fill(query);
+    await page.locator('#favoriteInput').click();
+    assert.deepEqual((await stored(page, favoritesKey)).items, [{ key: query.replace('-', ''), display: query }]);
+    await complete(page, query);
+    const resultPart = pagePath === '/' ? 'WIPER-100' : 'PAD-200';
+    await page.locator('.result-main').getByRole('button', { name: 'Добавить в избранное: ' + resultPart, exact: true }).click();
+    assert.equal((await stored(page, favoritesKey)).items.length, 2);
+    const analogue = pagePath === '/' ? 'W1-ALT' : 'P-SECOND';
+    if (pagePath !== '/') {
+        await page.locator('.detail-row').getByRole('button', { name: 'Добавить в избранное: ' + analogue, exact: true }).click();
+        assert.equal((await stored(page, favoritesKey)).items.length, 3);
+    }
+    await page.reload();
+    await page.locator('#favorites').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#recentContent .personal-search').innerText(), query);
+    await page.locator('#favoritesContent').getByRole('button', { name: resultPart, exact: true }).click();
+    await page.locator('#results').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#resultsContent').innerText(), new RegExp(resultPart));
+    assert.equal((await stored(page, recentKey)).items[0].display, resultPart);
+    await page.locator('#favoritesContent').getByRole('button', { name: 'Удалить из избранного: ' + resultPart, exact: true }).click();
+    assert.ok(!(await stored(page, favoritesKey)).items.some(item => item.display === resultPart));
+    await page.locator('#recentContent').getByRole('button', { name: query, exact: true }).click();
+    await page.waitForFunction(([key, query]) => JSON.parse(localStorage.getItem(key)).items[0].display === query, [recentKey, query]);
+    await complete(page, query.toLowerCase().replace('-', ' . '));
+    assert.equal((await stored(page, recentKey)).items.filter(item => item.key === query.replace('-', '')).length, 1);
+    assert.equal((await stored(page, recentKey)).items[0].display, query.toLowerCase().replace('-', ' . '));
+
+    // Deterministic valid empty responses cover the history limit in both modes.
+    await page.route('**' + endpoint, route => route.fulfill({ json: { results: [] } }));
+    await page.route('**/search-prefix', route => route.fulfill({ json: { results: [] } }));
+    for (let i = 0; i < 22; i += 1) await complete(page, 'HISTORY-' + i);
+    let history = (await stored(page, recentKey)).items;
+    assert.equal(history.length, 20);
+    assert.equal(history[0].display, 'HISTORY-21');
+    assert.equal(history[19].display, 'HISTORY-2');
+    await complete(page, 'history . 3');
+    history = (await stored(page, recentKey)).items;
+    assert.equal(history.length, 20);
+    assert.equal(history[0].display, 'history . 3');
+    // Other symbols remain meaningful under the existing normalization rule.
+    await complete(page, 'HISTORY/3');
+    assert.equal((await stored(page, recentKey)).items[0].key, 'HISTORY/3');
+    const preservedFavorites = await stored(page, favoritesKey);
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.locator('#clearRecent').click();
+    assert.equal((await stored(page, recentKey)).items.length, 20);
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#clearRecent').click();
+    assert.equal((await stored(page, recentKey)).items.length, 0);
+    assert.equal(await page.locator('#recent').isVisible(), false);
+    assert.deepEqual(await stored(page, favoritesKey), preservedFavorites);
+    await page.unroute('**' + endpoint);
+    await page.unroute('**/search-prefix');
+
+    // A 2xx malformed response is an error, not a completed search.
+    await page.route('**' + endpoint, route => route.fulfill({ json: { error: 'Invalid payload' } }));
+    await submit(page, 'BAD-PAYLOAD');
+    await page.locator('#error').waitFor({ state: 'visible' });
+    assert.equal((await stored(page, recentKey)).items.length, 0);
+    await page.unroute('**' + endpoint);
+
+    for (const corrupt of ['{broken', JSON.stringify({ version: 2, items: [] }), JSON.stringify({ version: 1, items: {} })]) {
+        await page.evaluate(([key, value]) => localStorage.setItem(key, value), [recentKey, corrupt]);
+        await page.reload();
+        assert.equal(await page.locator('#recent').isVisible(), false);
+        assert.deepEqual(await stored(page, favoritesKey), preservedFavorites);
+        await complete(page, query);
+        assert.equal((await stored(page, recentKey)).items.length, 1);
+    }
+    await page.evaluate(([recentKey, favoritesKey]) => {
+        localStorage.setItem(recentKey, JSON.stringify({ version: 1, items: [
+            { key: 'REAL1', display: 'Real-1' }, { key: 'REAL1', display: 'REAL.1' },
+            { key: 'WRONG', display: 'Other' }, null, { display: 1 }
+        ] }));
+        localStorage.setItem(favoritesKey, '{broken');
+    }, [recentKey, favoritesKey]);
+    await page.reload();
+    assert.deepEqual(await page.locator('#recentContent .personal-search').allTextContents(), ['Real-1']);
+    assert.equal(await page.locator('#favorites').isVisible(), false);
+    await complete(page, query);
+    await assertContained(page);
+}
+
+async function checkBlockedStorage(browser, baseURL) {
+    for (const mode of ['getter', 'read', 'write']) {
+        const context = await browser.newContext({ baseURL, serviceWorkers: 'block' });
+        await context.route('https://**', route => route.abort());
+        await context.addInitScript(mode => {
+            if (mode === 'getter') Object.defineProperty(window, 'localStorage', { get() { throw new Error('Blocked'); } });
+            else Storage.prototype[mode === 'read' ? 'getItem' : 'setItem'] = function() { throw new Error('Blocked'); };
+        }, mode);
+        const page = await context.newPage();
+        const errors = [];
+        page.on('pageerror', err => errors.push(err.message));
+        for (const pagePath of ['/', '/brake-pads']) {
+            await page.goto(pagePath);
+            const query = pagePath === '/' ? 'W1-ALT' : 'P-ALT';
+            await complete(page, query);
+            assert.equal(await page.locator('#recentContent .personal-search').innerText(), query);
+            await page.locator('#favoriteInput').click();
+            assert.equal(await page.locator('#favoritesContent .personal-search').innerText(), query);
+            assert.match(await page.locator('#notifications').innerText(), /Локальное сохранение недоступно/);
+            await page.locator('#favoritesContent .personal-search').click();
+            await page.locator('#results').waitFor({ state: 'visible' });
+            assert.equal(await page.locator('#error').isVisible(), false);
+        }
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
 }
 
 async function main() {
@@ -198,8 +330,11 @@ async function main() {
             }
         }
         assert.deepEqual(pageErrors, []);
+        for (const pagePath of ['/', '/brake-pads']) await checkPersonalLists(page, pagePath);
+        assert.deepEqual(pageErrors, []);
+        await checkBlockedStorage(browser, baseURL);
         await context.close();
-        console.log('UI checks passed: both categories, 1280/320 px, Enter/button, sections, empty/loading/errors, keyboard focus, escaped values.');
+        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history limit/dedup/order/replay/confirmed clear; favorites toggle/replay/reload; corrupt/versioned data; blocked storage reads/writes/getter.');
     } finally {
         await browser.close();
     }
