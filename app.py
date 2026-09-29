@@ -1,493 +1,637 @@
+import json
+import logging
 import os
 import re
-import json
-from flask import Flask, render_template, request, jsonify
+import threading
+from collections import OrderedDict, defaultdict
+from datetime import datetime, timezone
+from types import MappingProxyType
+
 import gspread
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
 from google.oauth2.service_account import Credentials
 
-app = Flask(__name__)
 
-# Нормализация вводимого артикула
+load_dotenv()
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+DEFAULT_REFRESH_SECONDS = 180
+WIPER_SHEET_TERMS = ("brake", "pad", "тормоз")
+BRAKE_SHEET_TERMS = ("wiper", "wipe", "щетк")
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
 def preprocess_part_number(part_number):
-    """Удаляет ведущую букву v/V из номера детали, если она есть."""
+    """Removes a leading V/v, preserving the existing public search behaviour."""
     if not isinstance(part_number, str):
-        return ''
+        return ""
     normalized = part_number.strip()
-    if normalized[:1].lower() == 'v':
+    if normalized[:1].lower() == "v":
         normalized = normalized[1:]
     return normalized
 
-# Приведение строк к единообразному виду для сопоставления
-def normalize_token_for_match(value):
-    """Uppercase + удаление всех неалфанумерик символов (пробелы, дефисы и т.п.)."""
-    if not isinstance(value, str):
-        return ''
-    return re.sub(r'[^A-Za-z0-9]', '', value).upper().strip()
 
-# Настройка Google Sheets API
-SCOPES = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive'
-]
+def normalize_token_for_match(value):
+    """Matches the existing wiper normalization: uppercase ASCII alphanumerics only."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[^A-Za-z0-9]", "", value).upper().strip()
+
+
+def _get_google_credentials():
+    service_account_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+    if service_account_key:
+        return Credentials.from_service_account_info(
+            json.loads(service_account_key), scopes=SCOPES
+        )
+
+    service_account_file = os.getenv(
+        "GOOGLE_SERVICE_ACCOUNT_FILE", "service-account-key.json"
+    )
+    if not os.path.exists(service_account_file):
+        raise ValueError(
+            "Не задан GOOGLE_SERVICE_ACCOUNT_KEY и не найден файл service account"
+        )
+    return Credentials.from_service_account_file(service_account_file, scopes=SCOPES)
+
+
+def _worksheet_rows():
+    """Returns all worksheet rows once, refusing to publish a partial spreadsheet read."""
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_ID")
+    if not spreadsheet_id:
+        raise ValueError("GOOGLE_SHEETS_ID не установлен в переменной окружения")
+
+    client = gspread.authorize(_get_google_credentials())
+    spreadsheet = client.open_by_key(spreadsheet_id)
+    worksheets = []
+    for worksheet in spreadsheet.worksheets():
+        try:
+            worksheets.append((worksheet.title, worksheet.get_all_values()))
+        except Exception as error:
+            logger.exception("Не удалось прочитать лист Google Sheets: %s", worksheet.title)
+            raise RuntimeError(
+                f"Не удалось прочитать лист Google Sheets: {worksheet.title}"
+            ) from error
+    return worksheets
+
+
+def _parse_wiper_rows(worksheet_title, rows):
+    if any(term in worksheet_title.lower() for term in WIPER_SHEET_TERMS):
+        return []
+
+    current_section = None
+    parsed = []
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+        first_cell = row[0].strip()
+        first_lower = first_cell.lower()
+        if "front wipers" in first_lower:
+            current_section = "Front Wipers"
+        elif "back wipers" in first_lower:
+            current_section = "Back Wipers"
+        elif len(row) >= 2 and row[1].strip():
+            if not any(
+                keyword in first_lower
+                for keyword in ("wipers", "front", "back", "brake", "pad", "тормоз")
+            ) and not any(
+                keyword in row[1].lower() for keyword in ("brake", "pad", "тормоз")
+            ):
+                parsed.append(
+                    {
+                        "main_part": first_cell,
+                        "alt_parts": row[1].strip(),
+                        "section": current_section,
+                    }
+                )
+    return parsed
+
+
+def _parse_brake_pad_rows(worksheet_title, rows):
+    worksheet_title_lower = worksheet_title.lower()
+    if any(term in worksheet_title_lower for term in BRAKE_SHEET_TERMS):
+        return []
+
+    if "front" in worksheet_title_lower and (
+        "brake" in worksheet_title_lower or "pad" in worksheet_title_lower
+    ):
+        current_section = "Front Brake Pads"
+    elif ("back" in worksheet_title_lower or "rear" in worksheet_title_lower) and (
+        "brake" in worksheet_title_lower or "pad" in worksheet_title_lower
+    ):
+        current_section = "Rear Brake Pads"
+    else:
+        current_section = worksheet_title
+
+    parsed = []
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+
+        first_cell = row[0].strip()
+        first_lower = first_cell.lower()
+        if current_section == worksheet_title:
+            if "front brake" in first_lower or "front pads" in first_lower:
+                current_section = "Front Brake Pads"
+            elif any(
+                marker in first_lower
+                for marker in ("back brake", "rear brake", "back pads", "rear pads")
+            ):
+                current_section = "Rear Brake Pads"
+
+        if len(row) < 3 or not (row[1].strip() or row[2].strip()):
+            continue
+        if any(
+            keyword in first_lower
+            for keyword in (
+                "brake",
+                "pads",
+                "front",
+                "back",
+                "rear",
+                "part number",
+                "oe analogue",
+                "not original",
+                "wiper",
+                "wipe",
+                "щетк",
+            )
+        ):
+            continue
+        if any(
+            keyword in row[1].lower() or keyword in row[2].lower()
+            for keyword in BRAKE_SHEET_TERMS
+        ):
+            continue
+        parsed.append(
+            {
+                "main_part": first_cell,
+                "oe_analogue": row[1].strip(),
+                "not_original": row[2].strip(),
+                "section": current_section,
+            }
+        )
+    return parsed
+
+
+def get_all_google_sheets_data():
+    """Loads both data sets from one complete Google Sheets snapshot."""
+    wiper_data = []
+    brake_pads_data = []
+    for worksheet_title, rows in _worksheet_rows():
+        wiper_data.extend(_parse_wiper_rows(worksheet_title, rows))
+        brake_pads_data.extend(_parse_brake_pad_rows(worksheet_title, rows))
+    return wiper_data, brake_pads_data
+
 
 def get_google_sheets_data():
-    """Получает данные из Google Sheets с информацией о щетках стеклоочистителей"""
-    try:
-        # Проверяем наличие переменной окружения
-        service_account_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-        if not service_account_key:
-            raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY не установлен в переменной окружения")
-        
-        # Загружаем JSON ключ из переменной окружения
-        service_account_info = json.loads(service_account_key)
-        credentials = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
-        
-        client = gspread.authorize(credentials)
-        
-        # Получаем ID таблицы из переменной окружения
-        spreadsheet_id = os.getenv('GOOGLE_SHEETS_ID')
-        if not spreadsheet_id:
-            raise ValueError("GOOGLE_SHEETS_ID не установлен в переменной окружения")
-        
-        # Открываем таблицу
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        
-        all_data = []
-        
-        for worksheet in spreadsheet.worksheets():
-            try:
-                worksheet_title = worksheet.title.lower()
-                
-                # Пропускаем листы с тормозными колодками
-                if any(keyword in worksheet_title for keyword in ['brake', 'pad', 'тормоз']):
-                    continue
-                
-                data = worksheet.get_all_values()
-                current_section = None
-                
-                for row in data:
-                    if len(row) > 0 and row[0].strip():
-                        # Определяем секцию по заголовкам
-                        if 'front wipers' in row[0].lower():
-                            current_section = 'Front Wipers'
-                        elif 'back wipers' in row[0].lower():
-                            current_section = 'Back Wipers'
-                        elif len(row) >= 2 and row[0].strip() and row[1].strip():
-                            # Проверяем, что это не данные о тормозных колодках
-                            if (not any(keyword in row[0].lower() for keyword in ['wipers', 'front', 'back', 'brake', 'pad', 'тормоз']) and
-                                not any(keyword in row[1].lower() for keyword in ['brake', 'pad', 'тормоз'])):
-                                all_data.append({
-                                    'main_part': row[0].strip(),
-                                    'alt_parts': row[1].strip(),
-                                    'section': current_section
-                                })
-            except Exception as e:
-                print(f"Ошибка при чтении листа {worksheet.title}: {e}")
-                continue
-        
-        return all_data
-        
-    except Exception as e:
-        print(f"Ошибка при получении данных из Google Sheets: {e}")
-        return []
+    """Compatibility helper for scripts that inspect wiper data directly."""
+    return get_all_google_sheets_data()[0]
+
 
 def get_brake_pads_data():
-    """Получает данные из Google Sheets с информацией о тормозных колодках"""
-    try:
-        # Проверяем наличие переменной окружения
-        service_account_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-        if not service_account_key:
-            raise ValueError("GOOGLE_SERVICE_ACCOUNT_KEY не установлен в переменной окружения")
-        
-        # Загружаем JSON ключ из переменной окружения
-        service_account_info = json.loads(service_account_key)
-        credentials = Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
-        
-        client = gspread.authorize(credentials)
-        
-        # Получаем ID таблицы из переменной окружения
-        spreadsheet_id = os.getenv('GOOGLE_SHEETS_ID')
-        if not spreadsheet_id:
-            raise ValueError("GOOGLE_SHEETS_ID не установлен в переменной окружения")
-        
-        # Открываем таблицу
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        
-        # Получаем все листы
-        all_data = []
-        
-        for worksheet in spreadsheet.worksheets():
-            try:
-                worksheet_title = worksheet.title.lower()
-                
-                # Пропускаем листы со щетками стеклоочистителей
-                if any(keyword in worksheet_title for keyword in ['wiper', 'wipe', 'щетк']):
-                    continue
-                
-                data = worksheet.get_all_values()
-                current_section = None
-                
-                # Определяем тип тормозных колодок по названию листа
-                if 'front' in worksheet_title and ('brake' in worksheet_title or 'pad' in worksheet_title):
-                    current_section = 'Front Brake Pads'
-                elif ('back' in worksheet_title or 'rear' in worksheet_title) and ('brake' in worksheet_title or 'pad' in worksheet_title):
-                    current_section = 'Rear Brake Pads'
-                else:
-                    current_section = worksheet.title  # Используем название листа как есть
-                
-                # Определяем тип тормозных колодок по содержимому листа
-                for row in data:
-                    if len(row) > 0 and row[0].strip():
-                        # Определяем секцию по заголовкам (если не определили по названию листа)
-                        if current_section == worksheet.title:
-                            if 'front brake' in row[0].lower() or 'front pads' in row[0].lower():
-                                current_section = 'Front Brake Pads'
-                            elif 'back brake' in row[0].lower() or 'rear brake' in row[0].lower() or 'back pads' in row[0].lower() or 'rear pads' in row[0].lower():
-                                current_section = 'Rear Brake Pads'
-                        
-                        if len(row) >= 3 and row[0].strip():
-                            # Проверяем, что это не заголовок и есть данные в колонках
-                            # Исключаем данные о щетках стеклоочистителей
-                            if (not any(keyword in row[0].lower() for keyword in ['brake', 'pads', 'front', 'back', 'rear', 'part number', 'oe analogue', 'not original', 'wiper', 'wipe', 'щетк']) and
-                                not any(keyword in row[1].lower() for keyword in ['wiper', 'wipe', 'щетк']) and
-                                not any(keyword in row[2].lower() for keyword in ['wiper', 'wipe', 'щетк']) and
-                                row[0].strip() and (row[1].strip() or row[2].strip())):
-                                
-                                # Сохраняем отдельно OE analogue и Not Original
-                                oe_analogue = row[1].strip() if len(row) > 1 else ''
-                                not_original = row[2].strip() if len(row) > 2 else ''
-                                
-                                all_data.append({
-                                    'main_part': row[0].strip(),
-                                    'oe_analogue': oe_analogue,
-                                    'not_original': not_original,
-                                    'section': current_section
-                                })
-                            
-            except Exception as e:
-                print(f"Ошибка при чтении листа {worksheet.title}: {e}")
-                continue
-        
-        return all_data
-        
-    except Exception as e:
-        print(f"Ошибка при получении данных из Google Sheets: {e}")
-        return []
+    """Compatibility helper for scripts that inspect brake-pad data directly."""
+    return get_all_google_sheets_data()[1]
+
 
 def normalize_data(raw_data):
-    """Нормализует данные из таблицы в формат main_part | alt_part с информацией о типе щёток"""
+    """Preserves the existing wiper token filtering and main-part lookup behaviour."""
     normalized_data = []
-    
     for item in raw_data:
-        if isinstance(item, dict) and 'main_part' in item and 'alt_parts' in item:
-            main_part = item['main_part']
-            alt_parts_str = item['alt_parts']
-            section = item.get('section', 'Unknown')
-            
-            if main_part and alt_parts_str:
-                # 1) Удаляем любые пометки в скобках полностью: (change mounting), (note) и т.п.
-                alt_parts_clean = re.sub(r"\([^)]*\)", "", alt_parts_str)
-                # 2) Разделяем по '/', ',', пробелам
-                raw_tokens = re.split(r'[/,\s]+', alt_parts_clean)
-                
-                # Добавляем сам основной артикул как альтернативу для корректной работы префиксного поиска
-                normalized_data.append({
-                    'main_part': main_part,
-                    'alt_part': main_part,
-                    'section': section
-                })
+        if not isinstance(item, dict) or "main_part" not in item or "alt_parts" not in item:
+            continue
+        main_part = item["main_part"]
+        alt_parts_str = item["alt_parts"]
+        section = item.get("section", "Unknown")
+        if not main_part or not alt_parts_str:
+            continue
 
-                for alt_part in raw_tokens:
-                    token = alt_part.strip()
-                    if not token:
-                        continue
-                    # 3) Оставляем только артикулы: латиница/цифры без пробелов, обязательно содержит хотя бы одну цифру
-                    if not re.fullmatch(r'[A-Za-z0-9]+', token):
-                        continue
-                    if not re.search(r'\d', token):
-                        continue
-                    normalized_data.append({
-                        'main_part': main_part,
-                        'alt_part': token,
-                        'section': section
-                    })
-    
+        alt_parts_clean = re.sub(r"\([^)]*\)", "", alt_parts_str)
+        normalized_data.append(
+            {"main_part": main_part, "alt_part": main_part, "section": section}
+        )
+        for token in re.split(r"[/,\s]+", alt_parts_clean):
+            token = token.strip()
+            if not token or not re.fullmatch(r"[A-Za-z0-9]+", token):
+                continue
+            if not re.search(r"\d", token):
+                continue
+            normalized_data.append(
+                {"main_part": main_part, "alt_part": token, "section": section}
+            )
     return normalized_data
+
 
 def normalize_brake_pads_data(raw_data):
-    """Нормализует данные тормозных колодок для поиска"""
+    """Preserves OE and Not Original fields required by the brake-pad page."""
     normalized_data = []
-    
     for item in raw_data:
-        if isinstance(item, dict) and 'main_part' in item:
-            main_part = item['main_part']
-            oe_analogue = item.get('oe_analogue', '')
-            not_original = item.get('not_original', '')
-            section = item.get('section', 'Unknown')
-            
-            if main_part:
-                # Добавляем основной артикул
-                normalized_data.append({
-                    'main_part': main_part,
-                    'alt_part': main_part,
-                    'section': section,
-                    'oe_analogue': oe_analogue,
-                    'not_original': not_original
-                })
-                
-                # Добавляем OE analogue как альтернативу
-                if oe_analogue:
-                    normalized_data.append({
-                        'main_part': main_part,
-                        'alt_part': oe_analogue,
-                        'section': section,
-                        'oe_analogue': oe_analogue,
-                        'not_original': not_original
-                    })
-                
-                # Добавляем Not Original как альтернативу
-                if not_original:
-                    normalized_data.append({
-                        'main_part': main_part,
-                        'alt_part': not_original,
-                        'section': section,
-                        'oe_analogue': oe_analogue,
-                        'not_original': not_original
-                    })
-    
+        if not isinstance(item, dict) or not item.get("main_part"):
+            continue
+        main_part = item["main_part"]
+        oe_analogue = item.get("oe_analogue", "")
+        not_original = item.get("not_original", "")
+        section = item.get("section", "Unknown")
+        for alt_part in (main_part, oe_analogue, not_original):
+            if alt_part:
+                normalized_data.append(
+                    {
+                        "main_part": main_part,
+                        "alt_part": alt_part,
+                        "section": section,
+                        "oe_analogue": oe_analogue,
+                        "not_original": not_original,
+                    }
+                )
     return normalized_data
 
-def search_analogs(part_number, data):
-    """Ищет аналоги для заданного артикула"""
-    part_number_norm = normalize_token_for_match(part_number)
-    found_groups = {}
-    
-    for item in data:
-        main_norm = normalize_token_for_match(item['main_part'])
-        alt_norm = normalize_token_for_match(item['alt_part'])
-        if (main_norm == part_number_norm or alt_norm == part_number_norm):
-            
-            main_part = item['main_part']
-            section = item.get('section', 'Unknown')
-            
-            if main_part not in found_groups:
-                found_groups[main_part] = {
-                    'parts': set(),
-                    'section': section
+
+def _build_wiper_indexes(normalized_data):
+    groups = OrderedDict()
+    for item in normalized_data:
+        main_part = item["main_part"]
+        group = groups.setdefault(
+            main_part,
+            {"main_part": main_part, "section": item.get("section", "Unknown"), "parts": set()},
+        )
+        group["parts"].add(main_part)
+        group["parts"].add(item["alt_part"])
+
+    exact_index = defaultdict(list)
+    prefix_index = defaultdict(list)
+    for group in groups.values():
+        result_group = MappingProxyType(
+            {
+                "main_part": group["main_part"],
+                "all_parts": tuple(sorted(group["parts"])),
+                "section": group["section"],
+            }
+        )
+        for part in group["parts"]:
+            token = normalize_token_for_match(part)
+            if token:
+                exact_index[token].append(result_group)
+            if len(token) >= 3:
+                prefix_index[token[:3]].append(result_group)
+
+    def freeze(index):
+        frozen = {}
+        for key, values in index.items():
+            unique = []
+            seen = set()
+            for group in values:
+                if group["main_part"] not in seen:
+                    seen.add(group["main_part"])
+                    unique.append(group)
+            frozen[key] = tuple(unique)
+        return MappingProxyType(frozen)
+
+    return freeze(exact_index), freeze(prefix_index)
+
+
+def _public_wiper_results(groups):
+    return [
+        {
+            "main_part": group["main_part"],
+            "all_parts": list(group["all_parts"]),
+            "section": group["section"],
+        }
+        for group in groups
+    ]
+
+
+def _build_brake_index(normalized_data):
+    groups = OrderedDict()
+    for item in normalized_data:
+        main_part = item["main_part"]
+        groups.setdefault(
+            main_part,
+            MappingProxyType(
+                {
+                    "main_part": main_part,
+                    "section": item.get("section", "Unknown"),
+                    "oe_analogue": item.get("oe_analogue", ""),
+                    "not_original": item.get("not_original", ""),
                 }
-            
-            found_groups[main_part]['parts'].add(item['alt_part'])
-            found_groups[main_part]['parts'].add(item['main_part'])
-    
-    result = []
-    for main_part, group_info in found_groups.items():
-        parts_list = sorted(list(group_info['parts']))
-        result.append({
-            'main_part': main_part,
-            'all_parts': parts_list,
-            'section': group_info['section']
-        })
-    
-    return result
+            ),
+        )
+
+    index = defaultdict(list)
+    for item in normalized_data:
+        token = item["alt_part"].upper().strip()
+        if token:
+            group = groups[item["main_part"]]
+            if group not in index[token]:
+                index[token].append(group)
+    return MappingProxyType({key: tuple(value) for key, value in index.items()})
+
+
+def _public_brake_results(groups):
+    return [
+        {
+            "main_part": group["main_part"],
+            "section": group["section"],
+            "oe_analogue": group["oe_analogue"],
+            "not_original": group["not_original"],
+        }
+        for group in groups
+    ]
+
+
+def search_analogs(part_number, data):
+    exact_index, _ = _build_wiper_indexes(data)
+    return _public_wiper_results(exact_index.get(normalize_token_for_match(part_number), ()))
+
 
 def search_by_prefix(part_prefix, data):
-    """Ищет группы по первым 3 символам артикула (без учета регистра)."""
-    prefix = normalize_token_for_match(part_prefix)
-    if len(prefix) < 3:
+    _, prefix_index = _build_wiper_indexes(data)
+    token = normalize_token_for_match(part_prefix)
+    if len(token) < 3:
         return []
-    prefix = prefix[:3]
-    found_groups = {}
-    
-    for item in data:
-        main = item['main_part']
-        alt = item['alt_part']
-        section = item.get('section', 'Unknown')
-        if normalize_token_for_match(main).startswith(prefix) or normalize_token_for_match(alt).startswith(prefix):
-            if main not in found_groups:
-                found_groups[main] = {
-                    'parts': set(),
-                    'section': section
-                }
-            found_groups[main]['parts'].add(alt)
-            found_groups[main]['parts'].add(main)
-    
-    result = []
-    for main_part, group_info in found_groups.items():
-        parts_list = sorted(list(group_info['parts']))
-        result.append({
-            'main_part': main_part,
-            'all_parts': parts_list,
-            'section': group_info['section']
-        })
-    return result
+    return _public_wiper_results(prefix_index.get(token[:3], ()))
+
 
 def search_brake_pads_analogs(part_number, data):
-    """Ищет аналоги тормозных колодок для заданного артикула"""
-    part_number = part_number.upper().strip()
-    found_groups = {}
-    
-    # Ищем артикул в данных
-    for item in data:
-        if (item['main_part'].upper() == part_number or 
-            item['alt_part'].upper() == part_number):
-            
-            main_part = item['main_part']
-            section = item.get('section', 'Unknown')
-            oe_analogue = item.get('oe_analogue', '')
-            not_original = item.get('not_original', '')
-            
-            if main_part not in found_groups:
-                found_groups[main_part] = {
-                    'section': section,
-                    'oe_analogue': oe_analogue,
-                    'not_original': not_original
-                }
-    
-    # Преобразуем в список для ответа
-    result = []
-    for main_part, group_info in found_groups.items():
-        result.append({
-            'main_part': main_part,
-            'section': group_info['section'],
-            'oe_analogue': group_info['oe_analogue'],
-            'not_original': group_info['not_original']
-        })
-    
-    return result
+    index = _build_brake_index(data)
+    return _public_brake_results(index.get(part_number.upper().strip(), ()))
 
-@app.route('/')
-def index():
-    return render_template('index.html')
 
-@app.route('/brake-pads')
-def brake_pads():
-    """Страница поиска тормозных колодок"""
-    return render_template('brake_pads.html')
-
-@app.route('/search', methods=['POST'])
-def search():
-    try:
-        data = request.get_json()
-        part_number = preprocess_part_number(data.get('part_number', ''))
-        
-        if not part_number:
-            return jsonify({'error': 'Part number not specified'}), 400
-        
-        raw_data = get_google_sheets_data()
-        if not raw_data:
-            return jsonify({'error': 'Failed to get data from table'}), 500
-        
-        normalized_data = normalize_data(raw_data)
-        results = search_analogs(part_number, normalized_data)
-        
-        # Если точных совпадений нет, а длина запроса >= 3 — пробуем префиксный поиск
-        if not results and len(part_number.strip()) >= 3:
-            prefix_results = search_by_prefix(part_number, normalized_data)
-            if prefix_results:
-                return jsonify({
-                    'message': f'Found results for prefix "{part_number[:3].upper()}":',
-                    'results': prefix_results
-                })
-        
-        if not results:
-            return jsonify({
-                'message': f'Part number "{part_number}" not found in database',
-                'results': []
-            })
-        
-        return jsonify({
-            'message': f'Found analogs for part number "{part_number}":',
-            'results': results
-        })
-        
-    except Exception as e:
-        return jsonify({'error': f'Search error: {str(e)}'}), 500
-
-@app.route('/search-prefix', methods=['POST'])
-def search_prefix():
-    """Ищет запчасти по первым 3 символам артикула (case-insensitive)."""
-    try:
-        data = request.get_json()
-        part_prefix = preprocess_part_number(data.get('part_prefix', ''))
-        if not part_prefix or len(part_prefix.strip()) < 3:
-            return jsonify({'error': 'Part prefix must be at least 3 characters'}), 400
-        
-        raw_data = get_google_sheets_data()
-        if not raw_data:
-            return jsonify({'error': 'Failed to get data from table'}), 500
-        
-        normalized_data = normalize_data(raw_data)
-        results = search_by_prefix(part_prefix, normalized_data)
-        
-        if not results:
-            return jsonify({
-                'message': f'No results for prefix "{part_prefix[:3].upper()}"',
-                'results': []
-            })
-        
-        return jsonify({
-            'message': f'Found results for prefix "{part_prefix[:3].upper()}":',
-            'results': results
-        })
-    except Exception as e:
-        return jsonify({'error': f'Search error: {str(e)}'}), 500
-
-@app.route('/search-brake-pads', methods=['POST'])
-def search_brake_pads():
-    """API endpoint для поиска аналогов тормозных колодок"""
-    try:
-        data = request.get_json()
-        part_number = preprocess_part_number(data.get('part_number', ''))
-        
-        if not part_number:
-            return jsonify({'error': 'Part number not specified'}), 400
-        
-        # Получаем данные из Google Sheets
-        raw_data = get_brake_pads_data()
-        if not raw_data:
-            return jsonify({'error': 'Failed to get data from table'}), 500
-        
-        # Нормализуем данные
-        normalized_data = normalize_brake_pads_data(raw_data)
-        
-        # Ищем аналоги
-        results = search_brake_pads_analogs(part_number, normalized_data)
-        
-        if not results:
-            return jsonify({
-                'message': f'Part number "{part_number}" not found in database',
-                'results': []
-            })
-        
-        return jsonify({
-            'message': f'Found analogs for part number "{part_number}":',
-            'results': results
-        })
-        
-    except Exception as e:
-        return jsonify({'error': f'Search error: {str(e)}'}), 500
-
-@app.route('/health')
-def health():
-    """Проверка состояния приложения"""
-    try:
-        # Проверяем наличие необходимых переменных окружения
-        env_status = {
-            'GOOGLE_SHEETS_ID': bool(os.getenv('GOOGLE_SHEETS_ID')),
-            'GOOGLE_SERVICE_ACCOUNT_KEY': bool(os.getenv('GOOGLE_SERVICE_ACCOUNT_KEY'))
+def load_search_snapshot():
+    wiper_raw_data, brake_raw_data = get_all_google_sheets_data()
+    wiper_normalized_data = normalize_data(wiper_raw_data)
+    brake_normalized_data = normalize_brake_pads_data(brake_raw_data)
+    if not wiper_normalized_data and not brake_normalized_data:
+        raise ValueError("Google Sheets вернул пустой поисковый снимок")
+    wiper_exact, wiper_prefix = _build_wiper_indexes(wiper_normalized_data)
+    return MappingProxyType(
+        {
+            "wiper_exact": wiper_exact,
+            "wiper_prefix": wiper_prefix,
+            "brake_exact": _build_brake_index(brake_normalized_data),
+            "wiper_raw_count": len(wiper_raw_data),
+            "wiper_normalized_count": len(wiper_normalized_data),
+            "brake_raw_count": len(brake_raw_data),
+            "brake_normalized_count": len(brake_normalized_data),
         }
-        
-        return jsonify({
-            'status': 'ok',
-            'environment_variables': env_status,
-            'message': 'Application is running'
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+    )
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+
+class SearchCache:
+    """Atomically publishes full, last-known-good wiper and brake-pad snapshots."""
+
+    def __init__(self, loader=load_search_snapshot, refresh_seconds=DEFAULT_REFRESH_SECONDS):
+        self._loader = loader
+        self._refresh_seconds = refresh_seconds
+        self._state_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._snapshot = None
+        self._last_success_at = None
+        self._last_attempt_at = None
+        self._last_error = None
+
+    def start(self):
+        with self._state_lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(
+                target=self._refresh_loop,
+                name="google-sheets-search-refresh",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def _refresh_loop(self):
+        while not self._stop_event.is_set():
+            self.refresh_once()
+            self._stop_event.wait(self._refresh_seconds)
+
+    def refresh_once(self):
+        if not self._refresh_lock.acquire(blocking=False):
+            return False
+        attempt_at = utc_now()
+        try:
+            snapshot = self._loader()
+        except Exception:
+            logger.exception("Не удалось обновить поисковый кеш Google Sheets")
+            with self._state_lock:
+                self._last_attempt_at = attempt_at
+                self._last_error = "Не удалось обновить данные Google Sheets"
+            return False
+        finally:
+            self._refresh_lock.release()
+
+        with self._state_lock:
+            self._snapshot = snapshot
+            self._last_attempt_at = attempt_at
+            self._last_success_at = utc_now()
+            self._last_error = None
+        logger.info(
+            "Поисковый кеш обновлён: дворники %s/%s, колодки %s/%s",
+            snapshot["wiper_raw_count"],
+            snapshot["wiper_normalized_count"],
+            snapshot["brake_raw_count"],
+            snapshot["brake_normalized_count"],
+        )
+        return True
+
+    def _current_snapshot(self):
+        with self._state_lock:
+            return self._snapshot
+
+    def search_wipers(self, part_number):
+        snapshot = self._current_snapshot()
+        if snapshot is None:
+            return None
+        return _public_wiper_results(
+            snapshot["wiper_exact"].get(normalize_token_for_match(part_number), ())
+        )
+
+    def search_wiper_prefix(self, part_prefix):
+        snapshot = self._current_snapshot()
+        if snapshot is None:
+            return None
+        token = normalize_token_for_match(part_prefix)
+        if len(token) < 3:
+            return []
+        return _public_wiper_results(snapshot["wiper_prefix"].get(token[:3], ()))
+
+    def search_brake_pads(self, part_number):
+        snapshot = self._current_snapshot()
+        if snapshot is None:
+            return None
+        return _public_brake_results(snapshot["brake_exact"].get(part_number.upper().strip(), ()))
+
+    def has_wiper_data(self):
+        snapshot = self._current_snapshot()
+        return bool(snapshot and snapshot["wiper_raw_count"])
+
+    def has_brake_pad_data(self):
+        snapshot = self._current_snapshot()
+        return bool(snapshot and snapshot["brake_raw_count"])
+
+    def status(self):
+        with self._state_lock:
+            snapshot = self._snapshot
+            return {
+                "cache_ready": snapshot is not None,
+                "last_success_at": self._last_success_at.isoformat()
+                if self._last_success_at
+                else None,
+                "last_attempt_at": self._last_attempt_at.isoformat()
+                if self._last_attempt_at
+                else None,
+                "wiper_record_count": snapshot["wiper_raw_count"] if snapshot else 0,
+                "brake_pad_record_count": snapshot["brake_raw_count"] if snapshot else 0,
+                "refresh_error": self._last_error,
+            }
+
+
+def _refresh_seconds_from_environment():
+    value = os.getenv("SHEETS_REFRESH_SECONDS", str(DEFAULT_REFRESH_SECONDS))
+    try:
+        return max(30, int(value))
+    except ValueError:
+        logger.warning("Некорректный SHEETS_REFRESH_SECONDS=%r", value)
+        return DEFAULT_REFRESH_SECONDS
+
+
+def _cache_unavailable_response():
+    return jsonify({"error": "Search database is still loading. Please try again shortly."}), 503
+
+
+def create_app(cache=None, start_cache_on_request=True):
+    flask_app = Flask(__name__)
+    search_cache = cache or SearchCache(refresh_seconds=_refresh_seconds_from_environment())
+    flask_app.extensions["search_cache"] = search_cache
+
+    if start_cache_on_request:
+
+        @flask_app.before_request
+        def start_search_cache():
+            search_cache.start()
+
+    @flask_app.route("/")
+    def index():
+        return render_template("index.html")
+
+    @flask_app.route("/brake-pads")
+    def brake_pads():
+        return render_template("brake_pads.html")
+
+    @flask_app.route("/search", methods=["POST"])
+    def search():
+        data = request.get_json(silent=True) or {}
+        part_number = preprocess_part_number(data.get("part_number", ""))
+        if not part_number:
+            return jsonify({"error": "Part number not specified"}), 400
+
+        results = search_cache.search_wipers(part_number)
+        if results is None:
+            return _cache_unavailable_response()
+        if not search_cache.has_wiper_data():
+            return jsonify({"error": "Failed to get data from table"}), 500
+        if not results and len(part_number.strip()) >= 3:
+            prefix_results = search_cache.search_wiper_prefix(part_number)
+            if prefix_results:
+                return jsonify(
+                    {
+                        "message": f'Found results for prefix "{part_number[:3].upper()}":',
+                        "results": prefix_results,
+                    }
+                )
+        if not results:
+            return jsonify(
+                {
+                    "message": f'Part number "{part_number}" not found in database',
+                    "results": [],
+                }
+            )
+        return jsonify(
+            {
+                "message": f'Found analogs for part number "{part_number}":',
+                "results": results,
+            }
+        )
+
+    @flask_app.route("/search-prefix", methods=["POST"])
+    def search_prefix():
+        data = request.get_json(silent=True) or {}
+        part_prefix = preprocess_part_number(data.get("part_prefix", ""))
+        if not part_prefix or len(part_prefix.strip()) < 3:
+            return jsonify({"error": "Part prefix must be at least 3 characters"}), 400
+        results = search_cache.search_wiper_prefix(part_prefix)
+        if results is None:
+            return _cache_unavailable_response()
+        if not search_cache.has_wiper_data():
+            return jsonify({"error": "Failed to get data from table"}), 500
+        if not results:
+            return jsonify(
+                {"message": f'No results for prefix "{part_prefix[:3].upper()}"', "results": []}
+            )
+        return jsonify(
+            {
+                "message": f'Found results for prefix "{part_prefix[:3].upper()}":',
+                "results": results,
+            }
+        )
+
+    @flask_app.route("/search-brake-pads", methods=["POST"])
+    def search_brake_pads():
+        data = request.get_json(silent=True) or {}
+        part_number = preprocess_part_number(data.get("part_number", ""))
+        if not part_number:
+            return jsonify({"error": "Part number not specified"}), 400
+        results = search_cache.search_brake_pads(part_number)
+        if results is None:
+            return _cache_unavailable_response()
+        if not search_cache.has_brake_pad_data():
+            return jsonify({"error": "Failed to get data from table"}), 500
+        if not results:
+            return jsonify(
+                {
+                    "message": f'Part number "{part_number}" not found in database',
+                    "results": [],
+                }
+            )
+        return jsonify(
+            {
+                "message": f'Found analogs for part number "{part_number}":',
+                "results": results,
+            }
+        )
+
+    @flask_app.route("/health")
+    def health():
+        environment_variables = {
+            "GOOGLE_SHEETS_ID": bool(os.getenv("GOOGLE_SHEETS_ID")),
+            "GOOGLE_SERVICE_ACCOUNT_KEY": bool(os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")),
+        }
+        return jsonify(
+            {
+                "status": "ok",
+                "environment_variables": environment_variables,
+                "message": "Application is running",
+                **search_cache.status(),
+            }
+        )
+
+    return flask_app
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    app.run(debug=False, host="0.0.0.0", port=port)

@@ -39,13 +39,14 @@ git push -u origin main
    - **Name**: `wiper-search`
    - **Environment**: `Python 3`
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `gunicorn app:app`
+   - **Start Command**: `gunicorn --workers 1 --threads 4 app:app`
    - **Plan**: `Free`
 
 #### Шаг 4: Добавьте переменные окружения
 В настройках сервиса добавьте:
 - `GOOGLE_SHEETS_ID`: ваш ID таблицы
-- Загрузите `service-account-key.json` как переменную окружения
+- `GOOGLE_SERVICE_ACCOUNT_KEY`: полное содержимое `service-account-key.json` как секретную переменную окружения
+- `SHEETS_REFRESH_SECONDS`: `180` для обновления кеша раз в три минуты
 
 ### 🚂 **Railway.app (Альтернатива)**
 
