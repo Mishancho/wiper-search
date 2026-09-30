@@ -503,6 +503,136 @@ async function checkCopyActions(browser, baseURL) {
     } finally { await context.close(); }
 }
 
+async function checkReleaseScenario(browser, baseURL) {
+    const context = await browser.newContext({ baseURL, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
+    await context.route('https://**', route => route.abort());
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+        for (const [pagePath, query, main, copyPart, endpoint] of [
+            ['/', 'w1 - alt', 'WIPER-100', 'W1ALT', '/search'],
+            ['/brake-pads', 'p - alt', 'PAD-200', 'P-ALT', '/search-brake-pads']
+        ]) {
+            await page.goto(pagePath);
+            await page.evaluate(() => localStorage.clear());
+            await page.reload();
+            await complete(page, query);
+            assert.match(await page.locator('#resultsContent').innerText(), new RegExp(main));
+            await page.getByRole('button', { name: `Копировать артикул: ${copyPart}`, exact: true }).first().click();
+            assert.equal(await page.evaluate(() => navigator.clipboard.readText()), copyPart);
+            await page.locator('.copy-all').first().click();
+            assert.match(await page.evaluate(() => navigator.clipboard.readText()), new RegExp(`Основной артикул: ${main}`));
+
+            await page.locator('#recentContent .personal-search').first().click();
+            await page.waitForFunction(([key, display]) => JSON.parse(localStorage.getItem(key)).items[0].display === display,
+                [recentKey, query]);
+            await page.locator('#partNumber').fill(query);
+            await page.locator('#favoriteInput').click();
+            await page.locator('#favoritesContent .personal-search').first().click();
+            await page.locator('#results').waitFor({ state: 'visible' });
+
+            let missingMode = 'empty';
+            const missing = 'MISSING-42';
+            const found = pagePath === '/' ?
+                { main_part: missing, all_parts: [missing], section: 'Wipers' } :
+                { main_part: missing, oe_analogue: '', not_original: '', section: 'Brake Pads' };
+            await page.route('**' + endpoint, route => {
+                const body = route.request().postDataJSON();
+                if (body.part_number === missing) {
+                    if (missingMode === 'network') return route.abort();
+                    return route.fulfill({ json: { results: missingMode === 'found' ? [found] : [] } });
+                }
+                return route.continue();
+            });
+            if (pagePath === '/') await page.route('**/search-prefix', route => route.fulfill({ json: { results: [] } }));
+            try {
+                await complete(page, missing);
+                await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items[0].count === 1, notFoundKey);
+                await complete(page, missing);
+                await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items[0].count === 2, notFoundKey);
+                missingMode = 'network';
+                await submit(page, missing);
+                await page.locator('#error').waitFor({ state: 'visible' });
+                assert.equal((await stored(page, notFoundKey)).items[0].count, 2);
+                missingMode = 'found';
+                await complete(page, missing);
+                await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 0, notFoundKey);
+                assert.match(await page.locator('#resultsContent').innerText(), new RegExp(missing));
+                await page.reload();
+                assert.equal(await page.locator('#favorites').isVisible(), true);
+                assert.equal(await page.locator('#recent').isVisible(), true);
+                assert.equal(await page.locator('#notFound').isVisible(), false);
+
+                // Clearing one list leaves the others intact.
+                const favorites = await stored(page, favoritesKey);
+                const journal = await stored(page, notFoundKey);
+                page.once('dialog', dialog => dialog.accept());
+                await page.locator('#clearRecent').click();
+                assert.equal((await stored(page, recentKey)).items.length, 0);
+                assert.deepEqual(await stored(page, favoritesKey), favorites);
+                assert.deepEqual(await stored(page, notFoundKey), journal);
+                await assertContained(page);
+            } finally {
+                await page.unroute('**' + endpoint);
+                if (pagePath === '/') await page.unroute('**/search-prefix');
+            }
+        }
+        assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+}
+
+async function checkServiceWorker(browser, baseURL) {
+    const context = await browser.newContext({ baseURL, serviceWorkers: 'allow' });
+    await context.route('https://**', route => route.abort());
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+        await page.goto('/');
+        await page.evaluate(async () => {
+            const old = await caches.open('wiper-search-v1');
+            await old.put('/', new Response('STALE-HTML'));
+        });
+        await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+        await page.waitForFunction(async () => {
+            const names = await caches.keys();
+            return names.includes('wiper-search-v2') && !names.includes('wiper-search-v1');
+        });
+        const shell = await page.evaluate(async () => {
+            const cache = await caches.open('wiper-search-v2');
+            for (const path of ['/', '/brake-pads', '/static/css/style.css', '/static/js/app.js']) {
+                await cache.put(path, new Response('STALE-ASSET'));
+            }
+            return Promise.all(['/', '/brake-pads', '/static/css/style.css', '/static/js/app.js']
+                .map(async path => ({ path, body: await (await fetch(path)).text() })));
+        });
+        for (const { path, body } of shell) {
+            assert.ok(!body.includes('STALE-ASSET'), `${path} came from stale cache`);
+            assert.ok(body.length > 100, `${path} did not load`);
+        }
+        await page.evaluate(() => navigator.serviceWorker.register('/static/sw.js'));
+        await page.reload();
+        await page.waitForFunction(async () => {
+            const scopes = (await navigator.serviceWorker.getRegistrations()).map(registration => new URL(registration.scope).pathname);
+            return scopes.includes('/') && !scopes.includes('/static/');
+        });
+        let calls = 0;
+        await page.route('**/search', route => {
+            calls += 1;
+            return route.fulfill({ json: { results: [{ main_part: `LIVE-${calls}`, all_parts: [`LIVE-${calls}`] }] } });
+        });
+        await submit(page, 'LIVE-1');
+        await page.getByRole('button', { name: 'Копировать артикул: LIVE-1' }).first().waitFor();
+        await submit(page, 'LIVE-2');
+        await page.getByRole('button', { name: 'Копировать артикул: LIVE-2' }).first().waitFor();
+        assert.equal(calls, 2);
+        const keys = await page.evaluate(async () => (await (await caches.open('wiper-search-v2')).keys()).map(request => request.url));
+        assert.ok(keys.every(key => !key.endsWith('/search')));
+        assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+}
+
 async function main() {
     const baseURL = await serverUrl();
     const browser = await chromium.launch({ headless: true });
@@ -601,8 +731,10 @@ async function main() {
         assert.deepEqual(pageErrors, []);
         await checkBlockedStorage(browser, baseURL);
         await checkCopyActions(browser, baseURL);
+        await checkReleaseScenario(browser, baseURL);
+        await checkServiceWorker(browser, baseURL);
         await context.close();
-        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history/favorites/storage; not-found journal and error exclusions; copy single/group/dedup/prefix, actual clipboard/API/fallback/errors, keyboard/focus, unchanged results/storage/request count.');
+        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history/favorites/storage; not-found journal and error exclusions; copy single/group/dedup/prefix, actual clipboard/API/fallback/errors, keyboard/focus; combined release journey; Service Worker shell refresh and live POST search.');
     } finally {
         await browser.close();
     }

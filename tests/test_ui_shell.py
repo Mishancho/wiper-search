@@ -55,3 +55,12 @@ class RussianInterfaceShellTests(unittest.TestCase):
         self.assertEqual(manifest["lang"], "ru")
         self.assertIn("дворников", manifest["name"])
         self.assertIn("тормозных колодок", manifest["name"])
+
+    def test_service_worker_can_control_both_pages(self):
+        response = self.client.get("/static/sw.js")
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["Service-Worker-Allowed"], "/")
+            self.assertEqual(response.headers["Cache-Control"], "no-cache")
+        finally:
+            response.close()

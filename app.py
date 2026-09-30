@@ -533,6 +533,13 @@ def create_app(cache=None, start_cache_on_request=True):
     search_cache = cache or SearchCache(refresh_seconds=_refresh_seconds_from_environment())
     flask_app.extensions["search_cache"] = search_cache
 
+    @flask_app.after_request
+    def allow_app_service_worker(response):
+        if request.path == "/static/sw.js":
+            response.headers["Service-Worker-Allowed"] = "/"
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     if start_cache_on_request:
 
         @flask_app.before_request

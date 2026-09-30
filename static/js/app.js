@@ -455,10 +455,16 @@ document.addEventListener('DOMContentLoaded', function() {
     if (window.innerWidth > 768) searchInput.focus();
 
     if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/static/sw.js').catch(registrationError => {
+        window.addEventListener('load', async () => {
+            try {
+                await navigator.serviceWorker.register('/static/sw.js', { scope: '/' });
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(registrations
+                    .filter(registration => new URL(registration.scope).pathname === '/static/')
+                    .map(registration => registration.unregister()));
+            } catch (registrationError) {
                 console.error('Не удалось зарегистрировать Service Worker:', registrationError);
-            });
+            }
         });
     }
 });
