@@ -358,6 +358,27 @@ summary:focus-visible {
     margin-top: 10px;
 }
 
+#notFound .personal-items {
+    flex-direction: column;
+}
+
+#clearNotFound {
+    margin-top: 10px;
+}
+
+.not-found-item {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    min-width: 0;
+}
+
+.not-found-date {
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
 .personal-heading,
 .personal-item,
 .result-part {

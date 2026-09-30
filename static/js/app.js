@@ -13,7 +13,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let copyStatusTimer;
     const storageKeys = {
         recent: 'part-search:recent:v1',
-        favorites: 'part-search:favorites:v1'
+        favorites: 'part-search:favorites:v1',
+        notFound: 'part-search:not-found:v1'
     };
 
     // Same matching rule as normalize_token_for_match on the server.
@@ -22,7 +23,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function storageWarning() {
-        notifications.textContent = 'Локальное сохранение недоступно. История и избранное работают до перезагрузки страницы.';
+        notifications.textContent = 'Локальное сохранение недоступно. Личные списки работают до перезагрузки страницы.';
     }
 
     function readList(name) {
@@ -61,6 +62,83 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let recent = readList('recent');
     let favorites = readList('favorites');
+
+    function readNotFound() {
+        let raw;
+        try {
+            raw = window.localStorage.getItem(storageKeys.notFound);
+        } catch (err) {
+            storageWarning();
+            return [];
+        }
+        try {
+            if (raw === null) return [];
+            const data = JSON.parse(raw);
+            if (!data || data.version !== 1 || !Array.isArray(data.items)) throw new Error('Invalid storage format');
+            const seen = new Set();
+            return data.items.filter(item => {
+                if (!item || typeof item.display !== 'string' || !item.display.trim() ||
+                    item.key !== normalizedKey(item.display) ||
+                    !['/search', '/search-brake-pads'].includes(item.endpoint) ||
+                    !Number.isSafeInteger(item.count) || item.count < 1 ||
+                    !Number.isSafeInteger(item.lastAttempt) || item.lastAttempt < 0 ||
+                    !Number.isFinite(new Date(item.lastAttempt).getTime())) return false;
+                const identity = item.endpoint + ':' + item.key;
+                if (seen.has(identity)) return false;
+                seen.add(identity);
+                return true;
+            }).map(item => ({
+                key: item.key, display: item.display, endpoint: item.endpoint,
+                count: item.count, lastAttempt: item.lastAttempt
+            })).sort((a, b) => b.lastAttempt - a.lastAttempt);
+        } catch (err) {
+            notifications.textContent = 'Не удалось восстановить локальный список. Поиск доступен.';
+            return [];
+        }
+    }
+
+    let notFound = readNotFound();
+
+    function writeNotFound() {
+        writeList('notFound', notFound);
+    }
+
+    function renderNotFound() {
+        const content = document.getElementById('notFoundContent');
+        const visible = notFound.filter(item => item.endpoint === searchEndpoint);
+        content.replaceChildren();
+        document.getElementById('notFound').hidden = visible.length === 0;
+        visible.forEach(item => {
+            const row = element('div', 'not-found-item');
+            const button = element('button', 'personal-search', item.display);
+            button.type = 'button';
+            button.addEventListener('click', () => {
+                searchInput.value = item.display;
+                updateFavoriteButton(favoriteInput, searchInput.value, true);
+                performSearch();
+            });
+            const date = element('time', 'not-found-date', new Date(item.lastAttempt).toLocaleString('ru-RU'));
+            date.dateTime = new Date(item.lastAttempt).toISOString();
+            row.append(button, element('span', 'not-found-count', `Не найдено: ${item.count}`), date);
+            content.append(row);
+        });
+    }
+
+    function updateNotFound(data, partNumber) {
+        const key = normalizedKey(partNumber);
+        const index = notFound.findIndex(item => item.endpoint === searchEndpoint && item.key === key);
+        if (data.results.length === 0) {
+            const count = index === -1 ? 1 : notFound[index].count + 1;
+            if (index !== -1) notFound.splice(index, 1);
+            notFound.unshift({ key, display: partNumber, endpoint: searchEndpoint, count, lastAttempt: Date.now() });
+        } else if (index !== -1) {
+            notFound.splice(index, 1);
+        } else {
+            return;
+        }
+        writeNotFound();
+        renderNotFound();
+    }
 
     function isFavorite(value) {
         return favorites.some(item => item.key === normalizedKey(value));
@@ -325,13 +403,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     validateResults(prefixData);
                     showResults(prefixData, partNumber);
                     recordSearch(partNumber);
+                    updateNotFound(prefixData, partNumber);
                     return;
                 } catch (prefixError) {
                     console.error('Ошибка поиска по префиксу:', prefixError);
+                    showResults(data, partNumber);
+                    recordSearch(partNumber);
+                    return;
                 }
             }
             showResults(data, partNumber);
             recordSearch(partNumber);
+            updateNotFound(data, partNumber);
         } catch (err) {
             console.error('Ошибка поиска:', err);
             showError('Не удалось получить результаты. Проверьте подключение к сети и повторите поиск.');
@@ -354,7 +437,14 @@ document.addEventListener('DOMContentLoaded', function() {
         writeList('recent', recent);
         renderPersonalLists();
     });
+    document.getElementById('clearNotFound').addEventListener('click', () => {
+        if (!window.confirm('Очистить весь журнал ненайденных артикулов?')) return;
+        notFound = [];
+        writeNotFound();
+        renderNotFound();
+    });
     renderPersonalLists();
+    renderNotFound();
 
     // Отправка формы работает и по Enter, и по кнопке, включая экранную клавиатуру.
     searchForm.addEventListener('submit', function(event) {

@@ -113,6 +113,7 @@ async function checkErrors(page, endpoint) {
 
 const recentKey = 'part-search:recent:v1';
 const favoritesKey = 'part-search:favorites:v1';
+const notFoundKey = 'part-search:not-found:v1';
 
 async function stored(page, key) {
     return page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
@@ -233,9 +234,175 @@ async function checkBlockedStorage(browser, baseURL) {
             await page.locator('#favoritesContent .personal-search').click();
             await page.locator('#results').waitFor({ state: 'visible' });
             assert.equal(await page.locator('#error').isVisible(), false);
+            await complete(page, 'ZZZ-999');
+            await page.locator('#notFound').waitFor({ state: 'visible' });
+            await page.locator('#notFound summary').click();
+            assert.match(await page.locator('#notFoundContent').innerText(), /ZZZ-999.*Не найдено: 1/s);
         }
         assert.deepEqual(errors, []);
         await context.close();
+    }
+}
+
+async function checkNotFound(page, pagePath) {
+    await page.goto(pagePath);
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
+    const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
+    const found = pagePath === '/' ?
+        { main_part: 'FOUND', all_parts: ['FOUND'], section: 'Wipers' } :
+        { main_part: 'FOUND', oe_analogue: '', not_original: '', section: 'Brake Pads' };
+    let mode = 'empty';
+    let prefixMode = 'empty';
+    let calls = 0;
+    const fulfill = (route, selected) => {
+        if (selected === 'network') return route.abort();
+        if (selected === 'invalid-json') return route.fulfill({ status: 200, contentType: 'text/html', body: '<html>error</html>' });
+        if (selected === 'malformed') return route.fulfill({ json: { error: 'bad payload' } });
+        if (typeof selected === 'number') return route.fulfill({ status: selected, json: { error: 'server error' } });
+        return route.fulfill({ json: { results: selected === 'found' ? [found] : [] } });
+    };
+    await page.route('**' + endpoint, route => { calls += 1; return fulfill(route, mode); });
+    if (pagePath === '/') await page.route('**/search-prefix', route => fulfill(route, prefixMode));
+    try {
+        await complete(page, 'Lost-1');
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items[0]?.count === 1, notFoundKey);
+        let items = (await stored(page, notFoundKey)).items;
+        assert.equal(items[0].key, 'LOST1');
+        assert.equal(items[0].endpoint, endpoint);
+        assert.ok(Number.isSafeInteger(items[0].lastAttempt));
+        assert.equal(await page.locator('#notFound').isVisible(), true);
+        await page.locator('#notFound summary').click();
+        assert.match(await page.locator('#notFoundContent').innerText(), /Lost-1.*Не найдено: 1/s);
+        const firstAttempt = items[0].lastAttempt;
+
+        await complete(page, 'lost . 1');
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items[0]?.count === 2, notFoundKey);
+        items = (await stored(page, notFoundKey)).items;
+        assert.equal(items.length, 1);
+        assert.equal(items[0].display, 'lost . 1');
+        assert.ok(items[0].lastAttempt >= firstAttempt);
+        await complete(page, 'Lost-2');
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items.length === 2, notFoundKey);
+        assert.deepEqual((await stored(page, notFoundKey)).items.map(item => item.display), ['Lost-2', 'lost . 1']);
+        assert.deepEqual(await page.locator('#notFoundContent .personal-search').allTextContents(), ['Lost-2', 'lost . 1']);
+        await page.reload();
+        await page.locator('#notFound').waitFor({ state: 'visible' });
+        assert.deepEqual(await page.locator('#notFoundContent .personal-search').allTextContents(), ['Lost-2', 'lost . 1']);
+        await page.locator('#notFound summary').click();
+
+        const beforeErrors = await stored(page, notFoundKey);
+        await submit(page, '');
+        await page.locator('#error').waitFor({ state: 'visible' });
+        for (const failed of [400, 503, 500, 'network', 'invalid-json', 'malformed']) {
+            mode = failed;
+            await submit(page, 'Lost-1');
+            await page.locator('#error').waitFor({ state: 'visible' });
+            assert.deepEqual(await stored(page, notFoundKey), beforeErrors);
+        }
+        mode = 'empty';
+        if (pagePath === '/') {
+            for (const failed of [503, 'network', 'invalid-json', 'malformed']) {
+                prefixMode = failed;
+                await complete(page, 'Lost-1');
+                assert.deepEqual(await stored(page, notFoundKey), beforeErrors);
+            }
+            prefixMode = 'found';
+            await complete(page, 'Lost-1');
+            await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 1, notFoundKey);
+            assert.equal((await stored(page, notFoundKey)).items[0].key, 'LOST2');
+            prefixMode = 'empty';
+            await complete(page, 'Lost-1');
+            await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 2, notFoundKey);
+        }
+        mode = 'found';
+        await complete(page, 'Lost-1');
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 1, notFoundKey);
+        assert.equal((await stored(page, notFoundKey)).items[0].key, 'LOST2');
+        mode = 'empty';
+        const beforeReplay = calls;
+        await page.locator('#notFoundContent .personal-search').click();
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items[0].count === 2, notFoundKey);
+        assert.equal(calls, beforeReplay + 1);
+        assert.equal(await page.locator('#partNumber').inputValue(), 'Lost-2');
+        assert.equal((await stored(page, notFoundKey)).items[0].count, 2);
+        page.once('dialog', dialog => dialog.dismiss());
+        await page.locator('#clearNotFound').click();
+        assert.equal((await stored(page, notFoundKey)).items.length, 1);
+        page.once('dialog', dialog => dialog.accept());
+        await page.locator('#clearNotFound').click();
+        assert.equal((await stored(page, notFoundKey)).items.length, 0);
+        assert.equal(await page.locator('#notFound').isVisible(), false);
+        assert.equal(await page.locator('#notFound').evaluate(node => node.getBoundingClientRect().height), 0);
+
+        await page.locator('#partNumber').fill('Favorite-1');
+        await page.locator('#favoriteInput').click();
+        const favorites = await stored(page, favoritesKey);
+        for (const corrupt of ['{broken', JSON.stringify({ version: 2, items: [] }), JSON.stringify({ version: 1, items: {} })]) {
+            const recent = await stored(page, recentKey);
+            await page.evaluate(([key, value]) => localStorage.setItem(key, value), [notFoundKey, corrupt]);
+            await page.reload();
+            assert.equal(await page.locator('#notFound').isVisible(), false);
+            assert.deepEqual(await stored(page, recentKey), recent);
+            assert.deepEqual(await stored(page, favoritesKey), favorites);
+            await complete(page, 'Fresh-1');
+            await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 1, notFoundKey);
+        }
+        await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ version: 1, items: [
+            { key: 'VALID', display: 'Va-lid', endpoint: '/search', count: 2, lastAttempt: 10 },
+            { key: 'WRONG', display: 'Other', endpoint: '/search', count: 1, lastAttempt: 10 },
+            { key: 'BAD', display: 'Bad', endpoint: '/search', count: 0, lastAttempt: 10 },
+            { key: 'VALID', display: 'Va-lid', endpoint: '/search', count: 3, lastAttempt: 5 },
+            { key: 'FUTURE', display: 'Future', endpoint: '/search', count: 1, lastAttempt: Number.MAX_SAFE_INTEGER }
+        ] })), notFoundKey);
+        await page.reload();
+        assert.equal(await page.locator('#notFound').isVisible(), pagePath === '/');
+        if (pagePath === '/') {
+            await page.locator('#notFound summary').click();
+            assert.deepEqual(await page.locator('#notFoundContent .personal-search').allTextContents(), ['Va-lid']);
+        }
+        await complete(page, 'Fresh-2');
+        assert.equal(await page.locator('#results').isVisible(), true);
+    } finally {
+        await page.unroute('**' + endpoint);
+        if (pagePath === '/') await page.unroute('**/search-prefix');
+    }
+}
+
+async function checkCategoryIsolation(page) {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
+    await page.route('**/search', route => route.fulfill({ json: { results: [] } }));
+    await page.route('**/search-prefix', route => route.fulfill({ json: { results: [] } }));
+    await page.route('**/search-brake-pads', route => route.fulfill({ json: { results: [] } }));
+    try {
+        await complete(page, 'Shared-1');
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items.length === 1, notFoundKey);
+        await page.goto('/brake-pads');
+        assert.equal(await page.locator('#notFound').isVisible(), false);
+        await complete(page, 'shared . 1');
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items.length === 2, notFoundKey);
+        assert.deepEqual(new Set((await stored(page, notFoundKey)).items.map(item => item.endpoint)),
+            new Set(['/search', '/search-brake-pads']));
+        await page.goto('/');
+        await page.locator('#notFound').waitFor({ state: 'visible' });
+        await page.locator('#notFound summary').click();
+        assert.deepEqual(await page.locator('#notFoundContent .personal-search').allTextContents(), ['Shared-1']);
+        await page.unroute('**/search');
+        await page.route('**/search', route => route.fulfill({ json: { results: [
+            { main_part: 'FOUND', all_parts: ['FOUND'], section: 'Wipers' }
+        ] } }));
+        await complete(page, 'Shared-1');
+        await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 1, notFoundKey);
+        assert.equal((await stored(page, notFoundKey)).items[0].endpoint, '/search-brake-pads');
+        assert.equal(await page.locator('#notFound').isVisible(), false);
+        await page.goto('/brake-pads');
+        await page.locator('#notFound').waitFor({ state: 'visible' });
+    } finally {
+        await page.unroute('**/search');
+        await page.unroute('**/search-prefix');
+        await page.unroute('**/search-brake-pads');
     }
 }
 
@@ -429,10 +596,13 @@ async function main() {
         assert.deepEqual(pageErrors, []);
         for (const pagePath of ['/', '/brake-pads']) await checkPersonalLists(page, pagePath);
         assert.deepEqual(pageErrors, []);
+        for (const pagePath of ['/', '/brake-pads']) await checkNotFound(page, pagePath);
+        await checkCategoryIsolation(page);
+        assert.deepEqual(pageErrors, []);
         await checkBlockedStorage(browser, baseURL);
         await checkCopyActions(browser, baseURL);
         await context.close();
-        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history/favorites/storage; copy single/group/dedup/prefix, actual clipboard/API/fallback/errors, keyboard/focus, unchanged results/storage/request count.');
+        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history/favorites/storage; not-found journal and error exclusions; copy single/group/dedup/prefix, actual clipboard/API/fallback/errors, keyboard/focus, unchanged results/storage/request count.');
     } finally {
         await browser.close();
     }
