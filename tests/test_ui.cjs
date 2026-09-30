@@ -239,6 +239,103 @@ async function checkBlockedStorage(browser, baseURL) {
     }
 }
 
+async function checkCopyActions(browser, baseURL) {
+    const context = await browser.newContext({ baseURL, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
+    await context.route('https://**', route => route.abort());
+    await context.addInitScript(() => {
+        const clipboard = navigator.clipboard;
+        const execCommand = document.execCommand.bind(document);
+        window.copyMode = 'api';
+        window.fallbackCalls = 0;
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, get() {
+            if (window.copyMode === 'missing') return undefined;
+            if (window.copyMode === 'getter') throw new Error('Clipboard blocked');
+            return { writeText: text => window.copyMode === 'api' ? clipboard.writeText(text) : Promise.reject(new Error('Clipboard denied')) };
+        } });
+        window.readClipboard = () => clipboard.readText();
+        document.execCommand = command => {
+            window.fallbackCalls += 1;
+            window.fallbackText = document.activeElement.value;
+            if (window.copyMode === 'failed') return false;
+            if (window.copyMode === 'throw') throw new Error('Copy blocked');
+            return execCommand(command);
+        };
+    });
+    const page = await context.newPage();
+    const errors = [];
+    const searches = [];
+    page.on('pageerror', err => errors.push(err.message));
+    page.on('request', request => {
+        if (request.method() === 'POST') searches.push(request.url());
+    });
+    async function copied(button, expected, key) {
+        if (key) { await button.focus(); await button.press(key); }
+        else await button.click();
+        await page.waitForFunction(async expected => (await window.readClipboard()) === expected, expected);
+        assert.equal(await page.locator('#copyStatus').innerText(), 'Скопировано.');
+    }
+    try {
+        for (const pagePath of ['/', '/brake-pads']) {
+            await page.goto(pagePath);
+            await page.setViewportSize({ width: 320, height: 900 });
+            const main = pagePath === '/' ? 'WIPER-100' : 'PAD-200';
+            const alt = pagePath === '/' ? 'W1ALT' : 'P-ALT';
+            const text = `Основной артикул: ${main}\nАналоги:\n${alt}` + (pagePath === '/' ? '' : '\nP-SECOND');
+            await complete(page, pagePath === '/' ? 'W1-ALT' : alt);
+            const beforeSearches = searches.length;
+            const beforeStorage = await page.evaluate(() => JSON.stringify(localStorage));
+            const resultBefore = await page.locator('#resultsContent').innerHTML();
+            await copied(page.getByRole('button', { name: `Копировать артикул: ${alt}`, exact: true }), alt);
+            await copied(page.locator('.main-part .copy-part'), main, 'Enter');
+            await copied(page.locator('.copy-all'), text, 'Space');
+            assert.equal(await page.evaluate(() => window.fallbackCalls), 0);
+            assert.notEqual(await page.locator('.copy-all').evaluate(node => getComputedStyle(node).outlineStyle), 'none');
+            await page.waitForFunction(() => document.getElementById('copyStatus').textContent === '');
+
+            for (const mode of ['denied', 'missing', 'getter']) {
+                await page.evaluate(mode => { window.copyMode = mode; }, mode);
+                await copied(page.getByRole('button', { name: `Копировать артикул: ${alt}`, exact: true }), alt, 'Enter');
+                assert.equal(await page.evaluate(() => window.fallbackText), alt);
+                assert.equal(await page.getByRole('button', { name: `Копировать артикул: ${alt}`, exact: true }).evaluate(node => node === document.activeElement), true);
+                assert.equal(await page.locator('.clipboard-fallback').count(), 0);
+            }
+            for (const mode of ['failed', 'throw']) {
+                await page.evaluate(mode => { window.copyMode = mode; }, mode);
+                await page.locator('.copy-all').click();
+                await page.locator('#copyStatus.copy-error').waitFor();
+                assert.match(await page.locator('#copyStatus').innerText(), /Выделите нужный артикул/);
+                assert.equal(await page.locator('#results').isVisible(), true);
+                assert.equal(await page.locator('#error').isVisible(), false);
+                assert.equal(await page.locator('#resultsContent').innerHTML(), resultBefore);
+                assert.equal(await page.locator('.clipboard-fallback').count(), 0);
+                assert.equal(await page.locator('.copy-all').evaluate(node => node === document.activeElement), true);
+            }
+            assert.equal(searches.length, beforeSearches);
+            assert.equal(await page.evaluate(() => JSON.stringify(localStorage)), beforeStorage);
+            await assertContained(page);
+
+            await page.evaluate(() => { window.copyMode = 'api'; });
+            const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
+            const duplicateGroup = pagePath === '/' ? {
+                main_part: 'MAIN-1', all_parts: ['MAIN.1', 'ALT-2', 'alt .2', 'ALT-3', 'MAIN-1'], section: 'Wipers'
+            } : { main_part: 'MAIN-1', oe_analogue: 'MAIN.1', not_original: 'ALT-2', section: 'Brake Pads' };
+            await page.route('**' + endpoint, route => route.fulfill({ json: { results: [duplicateGroup, {
+                main_part: 'OTHER-4', all_parts: ['OTHER-4'], oe_analogue: '', not_original: ''
+            }] } }));
+            await complete(page, 'ALT-2');
+            const expected = 'Основной артикул: MAIN-1\nАналоги:\nALT-2' + (pagePath === '/' ? '\nALT-3' : '');
+            await copied(page.locator('.copy-all').first(), expected);
+            await copied(page.locator('.copy-all').nth(1), 'Основной артикул: OTHER-4');
+            await page.unroute('**' + endpoint);
+            if (pagePath === '/') {
+                await complete(page, '2gm-extra');
+                await copied(page.locator('.copy-all'), 'Основной артикул: 2GM-900\nАналоги:\n2GM-ALT');
+            }
+        }
+        assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+}
+
 async function main() {
     const baseURL = await serverUrl();
     const browser = await chromium.launch({ headless: true });
@@ -333,8 +430,9 @@ async function main() {
         for (const pagePath of ['/', '/brake-pads']) await checkPersonalLists(page, pagePath);
         assert.deepEqual(pageErrors, []);
         await checkBlockedStorage(browser, baseURL);
+        await checkCopyActions(browser, baseURL);
         await context.close();
-        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history limit/dedup/order/replay/confirmed clear; favorites toggle/replay/reload; corrupt/versioned data; blocked storage reads/writes/getter.');
+        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history/favorites/storage; copy single/group/dedup/prefix, actual clipboard/API/fallback/errors, keyboard/focus, unchanged results/storage/request count.');
     } finally {
         await browser.close();
     }

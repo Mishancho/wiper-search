@@ -45,6 +45,8 @@ class RussianInterfaceShellTests(unittest.TestCase):
                 self.assertEqual(elements["notFound"][0], "details")
                 self.assertEqual(elements["notifications"][1]["role"], "status")
                 self.assertEqual(elements["notifications"][1]["aria-live"], "polite")
+                self.assertEqual(elements["copyStatus"][1]["role"], "status")
+                self.assertEqual(elements["copyStatus"][1]["aria-live"], "polite")
                 self.assertEqual(elements["error"][1]["role"], "alert")
 
     def test_manifest_describes_both_categories_in_russian(self):

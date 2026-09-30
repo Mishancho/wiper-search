@@ -9,6 +9,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const errorText = document.getElementById('errorText');
     const favoriteInput = document.getElementById('favoriteInput');
     const notifications = document.getElementById('notifications');
+    const copyStatus = document.getElementById('copyStatus');
+    let copyStatusTimer;
     const storageKeys = {
         recent: 'part-search:recent:v1',
         favorites: 'part-search:favorites:v1'
@@ -161,8 +163,75 @@ document.addEventListener('DOMContentLoaded', function() {
         return node;
     }
 
+    function showCopyStatus(message, failed = false) {
+        window.clearTimeout(copyStatusTimer);
+        copyStatus.textContent = message;
+        copyStatus.classList.toggle('copy-error', failed);
+        if (!failed) copyStatusTimer = window.setTimeout(() => { copyStatus.textContent = ''; }, 2500);
+    }
+
+    function fallbackCopy(text) {
+        const active = document.activeElement;
+        const selection = window.getSelection();
+        const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+        const textarea = element('textarea', 'clipboard-fallback');
+        textarea.value = text;
+        textarea.readOnly = true;
+        textarea.setAttribute('aria-label', 'Текст для копирования');
+        document.body.append(textarea);
+        try {
+            textarea.focus({ preventScroll: true });
+            textarea.select();
+            if (!document.execCommand('copy')) throw new Error('Copy failed');
+        } finally {
+            textarea.remove();
+            if (active && active.isConnected) active.focus({ preventScroll: true });
+            if (selection) {
+                selection.removeAllRanges();
+                ranges.forEach(range => selection.addRange(range));
+            }
+        }
+    }
+
+    async function copyText(text) {
+        try {
+            try {
+                if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('Clipboard unavailable');
+                await navigator.clipboard.writeText(text);
+            } catch (err) {
+                fallbackCopy(text);
+            }
+            showCopyStatus('Скопировано.');
+        } catch (err) {
+            showCopyStatus('Не удалось скопировать. Выделите нужный артикул и скопируйте его вручную.', true);
+        }
+    }
+
+    function copyButton(value, className = 'copy-part', label = value) {
+        const button = element('button', className, label);
+        button.type = 'button';
+        button.setAttribute('aria-label', `Копировать артикул: ${value}`);
+        button.title = 'Копировать артикул';
+        button.addEventListener('click', () => copyText(value));
+        return button;
+    }
+
+    function groupCopyText(group) {
+        const values = searchEndpoint === '/search-brake-pads' ? [group.oe_analogue, group.not_original] : group.all_parts;
+        const seen = new Set([normalizedKey(group.main_part)]);
+        const alternatives = values.filter(value => {
+            const key = normalizedKey(value);
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+        return `Основной артикул: ${group.main_part}` + (alternatives.length ? `\nАналоги:\n${alternatives.join('\n')}` : '');
+    }
+
     function showResults(data, partNumber) {
         hideAllStates();
+        window.clearTimeout(copyStatusTimer);
+        copyStatus.textContent = '';
         resultsContent.replaceChildren();
 
         if (!data.results || data.results.length === 0) {
@@ -173,10 +242,17 @@ document.addEventListener('DOMContentLoaded', function() {
             data.results.forEach(group => {
                 const card = element('div', 'result-group');
                 const heading = element('div', 'result-main');
-                heading.append(element('span', 'main-part', `Основной артикул: ${group.main_part}`));
+                const mainPart = element('span', 'main-part', 'Основной артикул: ');
+                mainPart.append(copyButton(group.main_part, 'copy-part main-part-number'));
+                heading.append(mainPart);
                 heading.append(favoriteButton(group.main_part));
                 heading.append(element('span', 'section-badge', sectionLabel(group.section)));
                 card.append(heading);
+                const copyAll = element('button', 'text-action copy-all', 'Копировать все');
+                copyAll.type = 'button';
+                copyAll.setAttribute('aria-label', `Копировать все: ${group.main_part}`);
+                copyAll.addEventListener('click', () => copyText(groupCopyText(group)));
+                card.append(copyAll);
 
                 if (searchEndpoint === '/search-brake-pads') {
                     const details = element('div', 'result-details');
@@ -187,7 +263,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         if (!value) return;
                         const row = element('div', 'detail-row');
                         row.append(element('span', 'detail-label', `${label}:`));
-                        row.append(element('span', 'detail-value', value));
+                        row.append(copyButton(value, 'copy-part detail-value'));
                         row.append(favoriteButton(value));
                         details.append(row);
                     });
@@ -197,7 +273,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     group.all_parts.forEach(part => {
                         const highlighted = part.toUpperCase() === partNumber.toUpperCase();
                         const item = element('div', 'result-part');
-                        item.append(element('span', highlighted ? 'part-badge highlighted' : 'part-badge', part));
+                        item.append(copyButton(part, highlighted ? 'copy-part part-badge highlighted' : 'copy-part part-badge'));
                         item.append(favoriteButton(part));
                         parts.append(item);
                     });

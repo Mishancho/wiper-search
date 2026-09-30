@@ -252,6 +252,52 @@ summary:focus-visible {
     gap: 10px;
 }
 
+.copy-part {
+    font: inherit;
+    color: inherit;
+    border: 1px solid #ccd2e7;
+    background: transparent;
+    border-radius: 10px;
+    padding: 6px 8px;
+    min-height: 44px;
+    max-width: 100%;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+
+.copy-part:hover {
+    text-decoration: underline;
+}
+
+.copy-part:focus-visible {
+    outline: 3px solid #263681;
+    outline-offset: 3px;
+}
+
+.copy-all {
+    margin-bottom: 12px;
+}
+
+.clipboard-fallback {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+#copyStatus:not(:empty) {
+    margin: 0 0 12px;
+}
+
+#copyStatus.copy-error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
 .part-badge {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
