@@ -238,6 +238,16 @@ async function checkBlockedStorage(browser, baseURL) {
             await page.locator('#notFound').waitFor({ state: 'visible' });
             await page.locator('#notFound summary').click();
             assert.match(await page.locator('#notFoundContent').innerText(), /ZZZ-999.*Не найдено: 1/s);
+            if (mode === 'write') {
+                await complete(page, 'ZZZ-999');
+                assert.match(await page.locator('#notFoundContent').innerText(), /ZZZ-999.*Не найдено: 2/s);
+                await complete(page, 'SECOND-888');
+                assert.deepEqual(await page.locator('#recentContent .personal-search').allTextContents(),
+                    ['SECOND-888', 'ZZZ-999', query]);
+                await page.locator('#favoriteInput').click();
+                assert.deepEqual(await page.locator('#favoritesContent .personal-search').allTextContents(),
+                    ['SECOND-888', query]);
+            }
         }
         assert.deepEqual(errors, []);
         await context.close();
@@ -633,6 +643,94 @@ async function checkServiceWorker(browser, baseURL) {
     } finally { await context.close(); }
 }
 
+async function checkCrossTabLists(browser, baseURL) {
+    const context = await browser.newContext({ baseURL, serviceWorkers: 'block' });
+    const first = await context.newPage();
+    const second = await context.newPage();
+    try {
+        await first.goto('/brake-pads');
+        await first.evaluate(() => localStorage.clear());
+        await first.reload();
+        await second.goto('/brake-pads');
+        for (const page of [first, second]) {
+            await page.route('**/search-brake-pads', route => route.fulfill({ json: { results: [] } }));
+        }
+        await complete(first, 'Cross-1');
+        await second.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items.length === 1, recentKey);
+        await complete(second, 'Cross-2');
+        assert.deepEqual((await stored(second, recentKey)).items.map(item => item.display), ['Cross-2', 'Cross-1']);
+        await first.waitForFunction(() => document.querySelectorAll('#recentContent .personal-search').length === 2);
+        assert.deepEqual(await first.locator('#recentContent .personal-search').allTextContents(), ['Cross-2', 'Cross-1']);
+
+        await first.locator('#partNumber').fill('Fav-1');
+        await first.locator('#favoriteInput').click();
+        await second.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items.length === 1, favoritesKey);
+        await second.locator('#partNumber').fill('Fav-2');
+        await second.locator('#favoriteInput').click();
+        assert.deepEqual((await stored(first, favoritesKey)).items.map(item => item.display), ['Fav-2', 'Fav-1']);
+        await first.waitForFunction(() => document.querySelectorAll('#favoritesContent .personal-search').length === 2);
+        await first.locator('#favoritesContent').getByRole('button', { name: 'Удалить из избранного: Fav-2' }).click();
+        assert.deepEqual((await stored(second, favoritesKey)).items.map(item => item.display), ['Fav-1']);
+
+        assert.deepEqual((await stored(second, notFoundKey)).items.map(item => item.display), ['Cross-2', 'Cross-1']);
+        await first.waitForFunction(() => document.querySelectorAll('#notFoundContent .personal-search').length === 2);
+        await complete(first, 'Cross-2');
+        assert.equal((await stored(second, notFoundKey)).items.find(item => item.display === 'Cross-2').count, 2);
+        await second.waitForFunction(() => document.querySelector('#notFoundContent .not-found-count')?.textContent === 'Не найдено: 2');
+    } finally {
+        await context.close();
+    }
+}
+
+async function checkLatestSearchWins(browser, baseURL) {
+    const context = await browser.newContext({ baseURL, serviceWorkers: 'block' });
+    const page = await context.newPage();
+    try {
+        await page.goto('/brake-pads');
+        await page.evaluate(() => localStorage.clear());
+        await page.reload();
+        for (const [index, [oldResult, newResult]] of [
+            ['found', 'found'], ['empty', 'found'], ['error', 'empty']
+        ].entries()) {
+            let releaseOld;
+            let oldStarted;
+            const oldStartedPromise = new Promise(resolve => { oldStarted = resolve; });
+            const oldGate = new Promise(resolve => { releaseOld = resolve; });
+            const oldQuery = `Old-${index}-${oldResult}`;
+            const newQuery = `New-${index}-${newResult}`;
+            await page.route('**/search-brake-pads', async route => {
+                const query = route.request().postDataJSON().part_number;
+                if (query === oldQuery) {
+                    oldStarted();
+                    await oldGate;
+                    if (oldResult === 'error') return route.fulfill({ status: 500, json: { error: 'failed' } });
+                    return route.fulfill({ json: { results: oldResult === 'empty' ? [] : [
+                        { main_part: oldQuery, oe_analogue: '', not_original: '', section: 'Brake Pads' }
+                    ] } });
+                }
+                return route.fulfill({ json: { results: newResult === 'empty' ? [] : [
+                    { main_part: newQuery, oe_analogue: '', not_original: '', section: 'Brake Pads' }
+                ] } });
+            });
+            await submit(page, oldQuery);
+            await oldStartedPromise;
+            await submit(page, newQuery);
+            await page.locator('#results').waitFor({ state: 'visible' });
+            await page.waitForFunction(([key, query]) => JSON.parse(localStorage.getItem(key))?.items[0]?.display === query,
+                [recentKey, newQuery]);
+            releaseOld();
+            await page.waitForTimeout(100);
+            assert.ok((await page.locator('#resultsContent').innerText()).includes(newQuery));
+            assert.equal(await page.locator('#error').isVisible(), false);
+            assert.ok(!(await stored(page, recentKey)).items.some(item => item.display === oldQuery));
+            assert.ok(!(await stored(page, notFoundKey))?.items.some(item => item.display === oldQuery));
+            await page.unroute('**/search-brake-pads');
+        }
+    } finally {
+        await context.close();
+    }
+}
+
 async function main() {
     const baseURL = await serverUrl();
     const browser = await chromium.launch({ headless: true });
@@ -730,6 +828,8 @@ async function main() {
         await checkCategoryIsolation(page);
         assert.deepEqual(pageErrors, []);
         await checkBlockedStorage(browser, baseURL);
+        await checkCrossTabLists(browser, baseURL);
+        await checkLatestSearchWins(browser, baseURL);
         await checkCopyActions(browser, baseURL);
         await checkReleaseScenario(browser, baseURL);
         await checkServiceWorker(browser, baseURL);

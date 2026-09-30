@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', function() {
         favorites: 'part-search:favorites:v1',
         notFound: 'part-search:not-found:v1'
     };
+    const unsavedLists = new Set();
 
     // Same matching rule as normalize_token_for_match on the server.
     function normalizedKey(value) {
@@ -26,13 +27,14 @@ document.addEventListener('DOMContentLoaded', function() {
         notifications.textContent = 'Локальное сохранение недоступно. Личные списки работают до перезагрузки страницы.';
     }
 
-    function readList(name) {
+    function readList(name, fallback = []) {
+        if (unsavedLists.has(name)) return fallback;
         let raw;
         try {
             raw = window.localStorage.getItem(storageKeys[name]);
         } catch (err) {
             storageWarning();
-            return [];
+            return fallback;
         }
         try {
             if (raw === null) return [];
@@ -55,7 +57,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function writeList(name, items) {
         try {
             window.localStorage.setItem(storageKeys[name], JSON.stringify({ version: 1, items }));
+            unsavedLists.delete(name);
         } catch (err) {
+            unsavedLists.add(name);
             storageWarning();
         }
     }
@@ -63,13 +67,14 @@ document.addEventListener('DOMContentLoaded', function() {
     let recent = readList('recent');
     let favorites = readList('favorites');
 
-    function readNotFound() {
+    function readNotFound(fallback = []) {
+        if (unsavedLists.has('notFound')) return fallback;
         let raw;
         try {
             raw = window.localStorage.getItem(storageKeys.notFound);
         } catch (err) {
             storageWarning();
-            return [];
+            return fallback;
         }
         try {
             if (raw === null) return [];
@@ -125,6 +130,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateNotFound(data, partNumber) {
+        notFound = readNotFound(notFound);
         const key = normalizedKey(partNumber);
         const index = notFound.findIndex(item => item.endpoint === searchEndpoint && item.key === key);
         if (data.results.length === 0) {
@@ -156,6 +162,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const display = value.trim();
         const key = normalizedKey(display);
         if (!key) return;
+        favorites = readList('favorites', favorites);
         favorites = isFavorite(display) ? favorites.filter(item => item.key !== key) : [{ key, display }, ...favorites];
         writeList('favorites', favorites);
         renderPersonalLists();
@@ -196,6 +203,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function recordSearch(partNumber) {
         const key = normalizedKey(partNumber);
         if (!key) return;
+        recent = readList('recent', recent);
         recent = [{ key, display: partNumber }, ...recent.filter(item => item.key !== key)].slice(0, 20);
         writeList('recent', recent);
         renderPersonalLists();
@@ -369,7 +377,10 @@ document.addEventListener('DOMContentLoaded', function() {
         return 'Не удалось выполнить поиск. Повторите попытку позже.';
     }
 
+    let latestSearchId = 0;
+
     async function performSearch() {
+        const searchId = ++latestSearchId;
         const partNumber = searchInput.value.trim();
         if (!partNumber) {
             showError('Введите артикул для поиска.');
@@ -383,11 +394,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ part_number: partNumber })
             });
+            if (searchId !== latestSearchId) return;
             if (!response.ok) {
                 showError(responseError(response.status));
                 return;
             }
             const data = await response.json();
+            if (searchId !== latestSearchId) return;
             validateResults(data);
 
             // Сохраняем текущий запасной поиск по префиксу только для дворников.
@@ -398,14 +411,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ part_prefix: partNumber })
                     });
+                    if (searchId !== latestSearchId) return;
                     if (!prefixResponse.ok) throw new Error('Ошибка поиска по префиксу');
                     const prefixData = await prefixResponse.json();
+                    if (searchId !== latestSearchId) return;
                     validateResults(prefixData);
                     showResults(prefixData, partNumber);
                     recordSearch(partNumber);
                     updateNotFound(prefixData, partNumber);
                     return;
                 } catch (prefixError) {
+                    if (searchId !== latestSearchId) return;
                     console.error('Ошибка поиска по префиксу:', prefixError);
                     showResults(data, partNumber);
                     recordSearch(partNumber);
@@ -416,6 +432,7 @@ document.addEventListener('DOMContentLoaded', function() {
             recordSearch(partNumber);
             updateNotFound(data, partNumber);
         } catch (err) {
+            if (searchId !== latestSearchId) return;
             console.error('Ошибка поиска:', err);
             showError('Не удалось получить результаты. Проверьте подключение к сети и повторите поиск.');
         }
@@ -442,6 +459,14 @@ document.addEventListener('DOMContentLoaded', function() {
         notFound = [];
         writeNotFound();
         renderNotFound();
+    });
+    window.addEventListener('storage', event => {
+        if (event.storageArea !== window.localStorage) return;
+        if (event.key === null || event.key === storageKeys.recent) recent = readList('recent', recent);
+        if (event.key === null || event.key === storageKeys.favorites) favorites = readList('favorites', favorites);
+        if (event.key === null || event.key === storageKeys.notFound) notFound = readNotFound(notFound);
+        if (event.key === null || event.key === storageKeys.recent || event.key === storageKeys.favorites) renderPersonalLists();
+        if (event.key === null || event.key === storageKeys.notFound) renderNotFound();
     });
     renderPersonalLists();
     renderNotFound();

@@ -46,6 +46,40 @@ def snapshot(wiper_raw=WIPER_RAW_DATA, brake_raw=BRAKE_RAW_DATA):
 
 
 class PartNumberNormalizationTests(unittest.TestCase):
+    def test_spaced_alternative_is_one_article_and_legacy_lists_still_split(self):
+        raw = [{
+            "main_part": "MAIN-1",
+            "alt_parts": "6R1 998 002, A-100 B.200 / C300",
+            "section": "Front Wipers",
+        }]
+        normalized = normalize_data(raw)
+        self.assertEqual(
+            [item["alt_part"] for item in normalized],
+            ["MAIN-1", "6R1 998 002", "A-100", "B.200", "C300"],
+        )
+        expected = [{
+            "main_part": "MAIN-1",
+            "all_parts": ["6R1 998 002", "MAIN-1"],
+            "section": "Front Wipers",
+        }]
+        cache = SearchCache(loader=lambda: snapshot(wiper_raw=raw))
+        self.assertTrue(cache.refresh_once())
+        for query in ("6R1 998 002", "6R1-998-002", "6R1.998.002", "6r1998002"):
+            with self.subTest(query=query):
+                self.assertEqual(search_analogs(query, normalized), expected)
+                self.assertEqual(cache.search_wipers(query), expected)
+
+        # Two-item whitespace lists remain separate, even if one item has letters.
+        for alternatives, parts in [
+            ("1234 5678", ["1234", "5678"]),
+            ("A100 5678", ["A100", "5678"]),
+        ]:
+            with self.subTest(alternatives=alternatives):
+                legacy = normalize_data([{"main_part": "MAIN-2", "alt_parts": alternatives}])
+                self.assertEqual([item["alt_part"] for item in legacy], ["MAIN-2", *parts])
+                for part in parts:
+                    self.assertEqual(search_analogs(part, legacy)[0]["all_parts"], sorted(["MAIN-2", part]))
+
     def test_only_case_and_approved_separators_are_ignored(self):
         for value in ("6R1 998 002", "6R1-998-002", "6R1.998.002", "6r1998002"):
             with self.subTest(value=value):

@@ -219,15 +219,21 @@ def normalize_data(raw_data):
         normalized_data.append(
             {"main_part": main_part, "alt_part": main_part, "section": section}
         )
-        for token in re.split(r"[/,\s]+", alt_parts_clean):
-            token = token.strip()
-            if not token or not re.fullmatch(r"[A-Za-z0-9.-]+", token):
-                continue
-            if not re.search(r"\d", token):
-                continue
-            normalized_data.append(
-                {"main_part": main_part, "alt_part": token, "section": section}
-            )
+        for field in re.split(r"[/,]", alt_parts_clean):
+            field = field.strip()
+            # Legacy sheets also separate articles with spaces. Recognize the
+            # three-group OEM shape (6R1 998 002) only; two-item lists such as
+            # A100 5678 and 1234 5678 must remain separate articles.
+            spaced_article = r"(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{3} [0-9]{3} [0-9]{3}"
+            tokens = [field] if re.fullmatch(spaced_article, field) else field.split()
+            for token in tokens:
+                if not re.fullmatch(r"[A-Za-z0-9. -]+", token):
+                    continue
+                if not re.search(r"\d", token):
+                    continue
+                normalized_data.append(
+                    {"main_part": main_part, "alt_part": token, "section": section}
+                )
     return normalized_data
 
 
