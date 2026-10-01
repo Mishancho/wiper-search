@@ -22,8 +22,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 DEFAULT_REFRESH_SECONDS = 180
-WIPER_SHEET_TERMS = ("brake", "pad", "тормоз")
-BRAKE_SHEET_TERMS = ("wiper", "wipe", "щетк")
+BRAKE_TITLE_TERMS = ("brake", "pad", "тормоз")
+WIPER_TITLE_TERMS = ("wiper", "wipe", "щетк")
+BRAKE_HEADER_TERMS = ("oe analogue", "oe analog", "not original", "оригинальный аналог")
 
 
 def utc_now():
@@ -85,9 +86,6 @@ def _worksheet_rows():
 
 
 def _parse_wiper_rows(worksheet_title, rows):
-    if any(term in worksheet_title.lower() for term in WIPER_SHEET_TERMS):
-        return []
-
     current_section = None
     parsed = []
     for row in rows:
@@ -116,11 +114,36 @@ def _parse_wiper_rows(worksheet_title, rows):
     return parsed
 
 
+def _worksheet_category(worksheet_title, rows):
+    """Classifies one source worksheet once so it cannot feed both indexes."""
+    title = worksheet_title.lower()
+    if any(term in title for term in BRAKE_TITLE_TERMS):
+        return "brake"
+    if any(term in title for term in WIPER_TITLE_TERMS):
+        return "wiper"
+
+    has_two_column_rows = False
+    has_three_column_rows = False
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+        row_text = " ".join(cell.strip().lower() for cell in row if cell.strip())
+        if any(term in row_text for term in BRAKE_HEADER_TERMS):
+            return "brake"
+        if len(row) == 1 and any(term in row[0].lower() for term in WIPER_TITLE_TERMS):
+            return "wiper"
+        second = len(row) >= 2 and row[1].strip()
+        third = len(row) >= 3 and row[2].strip()
+        has_two_column_rows = has_two_column_rows or (second and not third)
+        has_three_column_rows = has_three_column_rows or third
+
+    if has_two_column_rows and not has_three_column_rows:
+        return "wiper"
+    return None
+
+
 def _parse_brake_pad_rows(worksheet_title, rows):
     worksheet_title_lower = worksheet_title.lower()
-    if any(term in worksheet_title_lower for term in BRAKE_SHEET_TERMS):
-        return []
-
     if "front" in worksheet_title_lower and (
         "brake" in worksheet_title_lower or "pad" in worksheet_title_lower
     ):
@@ -169,7 +192,7 @@ def _parse_brake_pad_rows(worksheet_title, rows):
             continue
         if any(
             keyword in row[1].lower() or keyword in row[2].lower()
-            for keyword in BRAKE_SHEET_TERMS
+            for keyword in WIPER_TITLE_TERMS
         ):
             continue
         parsed.append(
@@ -188,8 +211,15 @@ def get_all_google_sheets_data():
     wiper_data = []
     brake_pads_data = []
     for worksheet_title, rows in _worksheet_rows():
-        wiper_data.extend(_parse_wiper_rows(worksheet_title, rows))
-        brake_pads_data.extend(_parse_brake_pad_rows(worksheet_title, rows))
+        category = _worksheet_category(worksheet_title, rows)
+        if category == "wiper":
+            wiper_data.extend(_parse_wiper_rows(worksheet_title, rows))
+        elif category == "brake":
+            brake_pads_data.extend(_parse_brake_pad_rows(worksheet_title, rows))
+        else:
+            logger.warning(
+                "Пропущен неоднозначный лист Google Sheets: %s", worksheet_title
+            )
     return wiper_data, brake_pads_data
 
 
@@ -496,6 +526,20 @@ class SearchCache:
             snapshot["brake_exact"].get(normalize_token_for_match(part_number), ())
         )
 
+    def has_wiper_match(self, part_number):
+        snapshot = self._current_snapshot()
+        return bool(
+            snapshot
+            and snapshot["wiper_exact"].get(normalize_token_for_match(part_number))
+        )
+
+    def has_brake_pad_match(self, part_number):
+        snapshot = self._current_snapshot()
+        return bool(
+            snapshot
+            and snapshot["brake_exact"].get(normalize_token_for_match(part_number))
+        )
+
     def has_wiper_data(self):
         snapshot = self._current_snapshot()
         return bool(snapshot and snapshot["wiper_raw_count"])
@@ -572,6 +616,17 @@ def create_app(cache=None, start_cache_on_request=True):
             return _cache_unavailable_response()
         if not search_cache.has_wiper_data():
             return jsonify({"error": "Failed to get data from table"}), 500
+        other_category = (
+            "brake-pads" if not results and search_cache.has_brake_pad_match(part_number) else None
+        )
+        if other_category:
+            return jsonify(
+                {
+                    "message": f'Part number "{part_number}" not found in database',
+                    "results": [],
+                    "other_category": other_category,
+                }
+            )
         if not results and len(part_number.strip()) >= 3:
             prefix_results = search_cache.search_wiper_prefix(part_number)
             if prefix_results:
@@ -629,10 +684,12 @@ def create_app(cache=None, start_cache_on_request=True):
         if not search_cache.has_brake_pad_data():
             return jsonify({"error": "Failed to get data from table"}), 500
         if not results:
+            other_category = "wipers" if search_cache.has_wiper_match(part_number) else None
             return jsonify(
                 {
                     "message": f'Part number "{part_number}" not found in database',
                     "results": [],
+                    **({"other_category": other_category} if other_category else {}),
                 }
             )
         return jsonify(

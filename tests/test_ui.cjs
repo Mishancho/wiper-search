@@ -67,10 +67,11 @@ async function checkShell(page, pagePath) {
     await page.getByRole('heading', { name: 'Поиск аналогов', exact: true }).waitFor();
     assert.match(await page.locator('.subtitle').innerText(), /Дворники и тормозные колодки/);
     assert.equal(await page.locator('.category-nav [aria-current="page"]').getAttribute('href'), pagePath);
-    for (const id of ['favorites', 'recent', 'notFound']) {
+    for (const id of ['recent', 'notFound']) {
         assert.equal(await page.locator('#' + id).isVisible(), false);
         assert.equal(await page.locator('#' + id).evaluate(node => node.getBoundingClientRect().height), 0);
     }
+    assert.equal(await page.locator('#favorites, #favoriteInput').count(), 0);
     assert.equal(await page.locator('#notifications').getAttribute('role'), 'status');
     assert.equal(await page.locator('#notifications').evaluate(node => node.getBoundingClientRect().height), 0);
     assert.equal(await page.locator('#partNumber').getAttribute('aria-describedby'), 'searchTips');
@@ -124,32 +125,19 @@ async function complete(page, query) {
     await page.locator('#results').waitFor({ state: 'visible' });
 }
 
+async function openCatalogMatches(page, index = 0) {
+    const details = page.locator('.catalog-matches').nth(index);
+    if (await details.count()) await details.locator('summary').click();
+}
+
 async function checkPersonalLists(page, pagePath) {
     await page.evaluate(() => localStorage.clear());
     await page.goto(pagePath);
     const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
     const query = pagePath === '/' ? 'W1-ALT' : 'P-ALT';
-    await page.locator('#partNumber').fill(query);
-    await page.locator('#favoriteInput').click();
-    assert.deepEqual((await stored(page, favoritesKey)).items, [{ key: query.replace('-', ''), display: query }]);
     await complete(page, query);
-    const resultPart = pagePath === '/' ? 'WIPER-100' : 'PAD-200';
-    await page.locator('.result-main').getByRole('button', { name: 'Добавить в избранное: ' + resultPart, exact: true }).click();
-    assert.equal((await stored(page, favoritesKey)).items.length, 2);
-    const analogue = pagePath === '/' ? 'W1-ALT' : 'P-SECOND';
-    if (pagePath !== '/') {
-        await page.locator('.detail-row').getByRole('button', { name: 'Добавить в избранное: ' + analogue, exact: true }).click();
-        assert.equal((await stored(page, favoritesKey)).items.length, 3);
-    }
     await page.reload();
-    await page.locator('#favorites').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#recentContent .personal-search').innerText(), query);
-    await page.locator('#favoritesContent').getByRole('button', { name: resultPart, exact: true }).click();
-    await page.locator('#results').waitFor({ state: 'visible' });
-    assert.match(await page.locator('#resultsContent').innerText(), new RegExp(resultPart));
-    assert.equal((await stored(page, recentKey)).items[0].display, resultPart);
-    await page.locator('#favoritesContent').getByRole('button', { name: 'Удалить из избранного: ' + resultPart, exact: true }).click();
-    assert.ok(!(await stored(page, favoritesKey)).items.some(item => item.display === resultPart));
     await page.locator('#recentContent').getByRole('button', { name: query, exact: true }).click();
     await page.waitForFunction(([key, query]) => JSON.parse(localStorage.getItem(key)).items[0].display === query, [recentKey, query]);
     await complete(page, query.toLowerCase().replace('-', ' . '));
@@ -171,7 +159,6 @@ async function checkPersonalLists(page, pagePath) {
     // Other symbols remain meaningful under the existing normalization rule.
     await complete(page, 'HISTORY/3');
     assert.equal((await stored(page, recentKey)).items[0].key, 'HISTORY/3');
-    const preservedFavorites = await stored(page, favoritesKey);
     page.once('dialog', dialog => dialog.dismiss());
     await page.locator('#clearRecent').click();
     assert.equal((await stored(page, recentKey)).items.length, 20);
@@ -179,7 +166,6 @@ async function checkPersonalLists(page, pagePath) {
     await page.locator('#clearRecent').click();
     assert.equal((await stored(page, recentKey)).items.length, 0);
     assert.equal(await page.locator('#recent').isVisible(), false);
-    assert.deepEqual(await stored(page, favoritesKey), preservedFavorites);
     await page.unroute('**' + endpoint);
     await page.unroute('**/search-prefix');
 
@@ -194,7 +180,6 @@ async function checkPersonalLists(page, pagePath) {
         await page.evaluate(([key, value]) => localStorage.setItem(key, value), [recentKey, corrupt]);
         await page.reload();
         assert.equal(await page.locator('#recent').isVisible(), false);
-        assert.deepEqual(await stored(page, favoritesKey), preservedFavorites);
         await complete(page, query);
         assert.equal((await stored(page, recentKey)).items.length, 1);
     }
@@ -207,7 +192,8 @@ async function checkPersonalLists(page, pagePath) {
     }, [recentKey, favoritesKey]);
     await page.reload();
     assert.deepEqual(await page.locator('#recentContent .personal-search').allTextContents(), ['Real-1']);
-    assert.equal(await page.locator('#favorites').isVisible(), false);
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), favoritesKey), null);
+    assert.equal(await page.locator('#favorites, #favoriteInput').count(), 0);
     await complete(page, query);
     await assertContained(page);
 }
@@ -228,11 +214,7 @@ async function checkBlockedStorage(browser, baseURL) {
             const query = pagePath === '/' ? 'W1-ALT' : 'P-ALT';
             await complete(page, query);
             assert.equal(await page.locator('#recentContent .personal-search').innerText(), query);
-            await page.locator('#favoriteInput').click();
-            assert.equal(await page.locator('#favoritesContent .personal-search').innerText(), query);
             assert.match(await page.locator('#notifications').innerText(), /Локальное сохранение недоступно/);
-            await page.locator('#favoritesContent .personal-search').click();
-            await page.locator('#results').waitFor({ state: 'visible' });
             assert.equal(await page.locator('#error').isVisible(), false);
             await complete(page, 'ZZZ-999');
             await page.locator('#notFound').waitFor({ state: 'visible' });
@@ -244,9 +226,6 @@ async function checkBlockedStorage(browser, baseURL) {
                 await complete(page, 'SECOND-888');
                 assert.deepEqual(await page.locator('#recentContent .personal-search').allTextContents(),
                     ['SECOND-888', 'ZZZ-999', query]);
-                await page.locator('#favoriteInput').click();
-                assert.deepEqual(await page.locator('#favoritesContent .personal-search').allTextContents(),
-                    ['SECOND-888', query]);
             }
         }
         assert.deepEqual(errors, []);
@@ -345,16 +324,12 @@ async function checkNotFound(page, pagePath) {
         assert.equal(await page.locator('#notFound').isVisible(), false);
         assert.equal(await page.locator('#notFound').evaluate(node => node.getBoundingClientRect().height), 0);
 
-        await page.locator('#partNumber').fill('Favorite-1');
-        await page.locator('#favoriteInput').click();
-        const favorites = await stored(page, favoritesKey);
         for (const corrupt of ['{broken', JSON.stringify({ version: 2, items: [] }), JSON.stringify({ version: 1, items: {} })]) {
             const recent = await stored(page, recentKey);
             await page.evaluate(([key, value]) => localStorage.setItem(key, value), [notFoundKey, corrupt]);
             await page.reload();
             assert.equal(await page.locator('#notFound').isVisible(), false);
             assert.deepEqual(await stored(page, recentKey), recent);
-            assert.deepEqual(await stored(page, favoritesKey), favorites);
             await complete(page, 'Fresh-1');
             await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 1, notFoundKey);
         }
@@ -416,6 +391,26 @@ async function checkCategoryIsolation(page) {
     }
 }
 
+async function checkCrossCategoryHint(page) {
+    for (const [pagePath, query, linkName, expectedPath, expectedStock] of [
+        ['/', 'P-ALT', 'Перейти к колодкам', '/brake-pads', 'PAD-200'],
+        ['/brake-pads', 'W1ALT', 'Перейти к дворникам', '/', 'WIPER-100']
+    ]) {
+        await page.goto(pagePath);
+        await page.evaluate(() => localStorage.clear());
+        await page.reload();
+        await complete(page, query);
+        assert.match(await page.locator('.empty-result').innerText(), /не найден в базе/);
+        const link = page.getByRole('link', { name: linkName, exact: true });
+        await link.waitFor();
+        assert.equal(new URL(await link.getAttribute('href'), 'http://localhost').pathname, expectedPath);
+        await link.click();
+        await page.waitForURL(url => new URL(url).pathname === expectedPath && new URL(url).searchParams.get('part_number') === query);
+        await page.getByText(expectedStock, { exact: true }).waitFor();
+        assert.equal(await page.locator('.cross-category-hint').count(), 0);
+    }
+}
+
 async function checkCopyActions(browser, baseURL) {
     const context = await browser.newContext({ baseURL, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
     await context.route('https://**', route => route.abort());
@@ -457,16 +452,24 @@ async function checkCopyActions(browser, baseURL) {
             await page.setViewportSize({ width: 320, height: 900 });
             const main = pagePath === '/' ? 'WIPER-100' : 'PAD-200';
             const alt = pagePath === '/' ? 'W1ALT' : 'P-ALT';
-            const text = `Основной артикул: ${main}\nАналоги:\n${alt}` + (pagePath === '/' ? '' : '\nP-SECOND');
             await complete(page, pagePath === '/' ? 'W1-ALT' : alt);
+            assert.equal(await page.locator('.catalog-matches').evaluate(node => node.open), false);
+            await openCatalogMatches(page);
             const beforeSearches = searches.length;
             const beforeStorage = await page.evaluate(() => JSON.stringify(localStorage));
             const resultBefore = await page.locator('#resultsContent').innerHTML();
             await copied(page.getByRole('button', { name: `Копировать артикул: ${alt}`, exact: true }), alt);
-            await copied(page.locator('.main-part .copy-part'), main, 'Enter');
-            await copied(page.locator('.copy-all'), text, 'Space');
+            await copied(page.locator('.stock-result .copy-part'), main, 'Enter');
             assert.equal(await page.evaluate(() => window.fallbackCalls), 0);
-            assert.notEqual(await page.locator('.copy-all').evaluate(node => getComputedStyle(node).outlineStyle), 'none');
+            assert.equal(await page.locator('.copy-all').count(), 0);
+            assert.equal(await page.locator('.stock-part').evaluate(node => node.tagName), 'SPAN');
+            assert.equal(await page.locator('.stock-part').evaluate(node => getComputedStyle(node).userSelect), 'text');
+            assert.notEqual(await page.locator('.stock-result .copy-part').evaluate(node => getComputedStyle(node).outlineStyle), 'none');
+            const alternativeText = pagePath === '/' ? page.locator('.result-part .part-badge').first() : page.locator('.detail-row .detail-value').first();
+            assert.equal(await alternativeText.evaluate(node => node.tagName), 'SPAN');
+            assert.equal(await alternativeText.evaluate(node => getComputedStyle(node).userSelect), 'text');
+            await alternativeText.click();
+            assert.equal(await page.evaluate(() => window.readClipboard()), main);
             await page.waitForFunction(() => document.getElementById('copyStatus').textContent === '');
 
             for (const mode of ['denied', 'missing', 'getter']) {
@@ -478,14 +481,15 @@ async function checkCopyActions(browser, baseURL) {
             }
             for (const mode of ['failed', 'throw']) {
                 await page.evaluate(mode => { window.copyMode = mode; }, mode);
-                await page.locator('.copy-all').click();
+                const copy = page.getByRole('button', { name: `Копировать артикул: ${alt}`, exact: true });
+                await copy.click();
                 await page.locator('#copyStatus.copy-error').waitFor();
                 assert.match(await page.locator('#copyStatus').innerText(), /Выделите нужный артикул/);
                 assert.equal(await page.locator('#results').isVisible(), true);
                 assert.equal(await page.locator('#error').isVisible(), false);
                 assert.equal(await page.locator('#resultsContent').innerHTML(), resultBefore);
                 assert.equal(await page.locator('.clipboard-fallback').count(), 0);
-                assert.equal(await page.locator('.copy-all').evaluate(node => node === document.activeElement), true);
+                assert.equal(await copy.evaluate(node => node === document.activeElement), true);
             }
             assert.equal(searches.length, beforeSearches);
             assert.equal(await page.evaluate(() => JSON.stringify(localStorage)), beforeStorage);
@@ -500,13 +504,22 @@ async function checkCopyActions(browser, baseURL) {
                 main_part: 'OTHER-4', all_parts: ['OTHER-4'], oe_analogue: '', not_original: ''
             }] } }));
             await complete(page, 'ALT-2');
-            const expected = 'Основной артикул: MAIN-1\nАналоги:\nALT-2' + (pagePath === '/' ? '\nALT-3' : '');
-            await copied(page.locator('.copy-all').first(), expected);
-            await copied(page.locator('.copy-all').nth(1), 'Основной артикул: OTHER-4');
+            await page.locator('.match-warning').waitFor();
+            assert.match(await page.locator('.match-warning').innerText(), /несколько вариантов/);
+            if (pagePath === '/brake-pads') {
+                assert.match(await page.locator('.catalog-summary').first().innerText(), /\(1\)/);
+            }
+            await openCatalogMatches(page);
+            if (pagePath === '/brake-pads') {
+                assert.equal(await page.getByRole('button', { name: 'Копировать артикул: MAIN.1', exact: true }).count(), 0);
+            }
+            await copied(page.getByRole('button', { name: 'Копировать артикул: MAIN-1', exact: true }).first(), 'MAIN-1');
+            await copied(page.getByRole('button', { name: 'Копировать артикул: ALT-2', exact: true }).first(), 'ALT-2');
             await page.unroute('**' + endpoint);
             if (pagePath === '/') {
                 await complete(page, '2gm-extra');
-                await copied(page.locator('.copy-all'), 'Основной артикул: 2GM-900\nАналоги:\n2GM-ALT');
+                await openCatalogMatches(page);
+                await copied(page.getByRole('button', { name: 'Копировать артикул: 2GM-ALT', exact: true }), '2GM-ALT');
             }
         }
         assert.deepEqual(errors, []);
@@ -528,19 +541,15 @@ async function checkReleaseScenario(browser, baseURL) {
             await page.evaluate(() => localStorage.clear());
             await page.reload();
             await complete(page, query);
+            await openCatalogMatches(page);
             assert.match(await page.locator('#resultsContent').innerText(), new RegExp(main));
             await page.getByRole('button', { name: `Копировать артикул: ${copyPart}`, exact: true }).first().click();
             assert.equal(await page.evaluate(() => navigator.clipboard.readText()), copyPart);
-            await page.locator('.copy-all').first().click();
-            assert.match(await page.evaluate(() => navigator.clipboard.readText()), new RegExp(`Основной артикул: ${main}`));
+            assert.equal(await page.locator('.copy-all, #favorites, #favoriteInput').count(), 0);
 
             await page.locator('#recentContent .personal-search').first().click();
             await page.waitForFunction(([key, display]) => JSON.parse(localStorage.getItem(key)).items[0].display === display,
                 [recentKey, query]);
-            await page.locator('#partNumber').fill(query);
-            await page.locator('#favoriteInput').click();
-            await page.locator('#favoritesContent .personal-search').first().click();
-            await page.locator('#results').waitFor({ state: 'visible' });
 
             let missingMode = 'empty';
             const missing = 'MISSING-42';
@@ -570,17 +579,14 @@ async function checkReleaseScenario(browser, baseURL) {
                 await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).items.length === 0, notFoundKey);
                 assert.match(await page.locator('#resultsContent').innerText(), new RegExp(missing));
                 await page.reload();
-                assert.equal(await page.locator('#favorites').isVisible(), true);
                 assert.equal(await page.locator('#recent').isVisible(), true);
                 assert.equal(await page.locator('#notFound').isVisible(), false);
 
-                // Clearing one list leaves the others intact.
-                const favorites = await stored(page, favoritesKey);
+                // Clearing history leaves the not-found journal intact.
                 const journal = await stored(page, notFoundKey);
                 page.once('dialog', dialog => dialog.accept());
                 await page.locator('#clearRecent').click();
                 assert.equal((await stored(page, recentKey)).items.length, 0);
-                assert.deepEqual(await stored(page, favoritesKey), favorites);
                 assert.deepEqual(await stored(page, notFoundKey), journal);
                 await assertContained(page);
             } finally {
@@ -662,16 +668,6 @@ async function checkCrossTabLists(browser, baseURL) {
         await first.waitForFunction(() => document.querySelectorAll('#recentContent .personal-search').length === 2);
         assert.deepEqual(await first.locator('#recentContent .personal-search').allTextContents(), ['Cross-2', 'Cross-1']);
 
-        await first.locator('#partNumber').fill('Fav-1');
-        await first.locator('#favoriteInput').click();
-        await second.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.items.length === 1, favoritesKey);
-        await second.locator('#partNumber').fill('Fav-2');
-        await second.locator('#favoriteInput').click();
-        assert.deepEqual((await stored(first, favoritesKey)).items.map(item => item.display), ['Fav-2', 'Fav-1']);
-        await first.waitForFunction(() => document.querySelectorAll('#favoritesContent .personal-search').length === 2);
-        await first.locator('#favoritesContent').getByRole('button', { name: 'Удалить из избранного: Fav-2' }).click();
-        assert.deepEqual((await stored(second, favoritesKey)).items.map(item => item.display), ['Fav-1']);
-
         assert.deepEqual((await stored(second, notFoundKey)).items.map(item => item.display), ['Cross-2', 'Cross-1']);
         await first.waitForFunction(() => document.querySelectorAll('#notFoundContent .personal-search').length === 2);
         await complete(first, 'Cross-2');
@@ -749,8 +745,9 @@ async function main() {
                 const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
                 await submit(page, pagePath === '/' ? 'v w1-alt' : 'P-ALT', true);
                 await page.locator('#results').waitFor({ state: 'visible' });
+                await openCatalogMatches(page);
                 const text = await page.locator('#resultsContent').innerText();
-                assert.match(text, pagePath === '/' ? /Основной артикул: WIPER-100/ : /Основной артикул: PAD-200/);
+                assert.match(text, pagePath === '/' ? /В заказ-наряд\s*WIPER-100/i : /В заказ-наряд\s*PAD-200/i);
                 assert.match(text, pagePath === '/' ? /Передние дворники/ : /Передние тормозные колодки/);
                 if (pagePath === '/brake-pads') {
                     assert.match(text, /Оригинальный аналог:\s*P-ALT/);
@@ -826,6 +823,7 @@ async function main() {
         assert.deepEqual(pageErrors, []);
         for (const pagePath of ['/', '/brake-pads']) await checkNotFound(page, pagePath);
         await checkCategoryIsolation(page);
+        await checkCrossCategoryHint(page);
         assert.deepEqual(pageErrors, []);
         await checkBlockedStorage(browser, baseURL);
         await checkCrossTabLists(browser, baseURL);
@@ -834,7 +832,7 @@ async function main() {
         await checkReleaseScenario(browser, baseURL);
         await checkServiceWorker(browser, baseURL);
         await context.close();
-        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history/favorites/storage; not-found journal and error exclusions; copy single/group/dedup/prefix, actual clipboard/API/fallback/errors, keyboard/focus; combined release journey; Service Worker shell refresh and live POST search.');
+        console.log('UI checks passed: both categories, 1280/320 px, search states/focus/escaped values; history/storage and removed favorites; not-found journal and error exclusions; per-article copy icons, selectable values, actual clipboard/API/fallback/errors, keyboard/focus; combined release journey; Service Worker shell refresh and live POST search.');
     } finally {
         await browser.close();
     }

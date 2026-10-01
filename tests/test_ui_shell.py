@@ -39,9 +39,11 @@ class RussianInterfaceShellTests(unittest.TestCase):
                 self.assertEqual(elements["searchBtn"][1]["type"], "submit")
                 self.assertEqual(elements["partNumber"][1]["aria-describedby"], "searchTips")
                 self.assertIn('for="partNumber"', html)
-                for section in ("favorites", "recent", "notFound"):
+                for section in ("recent", "notFound"):
                     self.assertIn("hidden", elements[section][1])
                     self.assertIn(section + "Content", elements)
+                self.assertNotIn("favorites", elements)
+                self.assertNotIn("favoriteInput", elements)
                 self.assertEqual(elements["notFound"][0], "details")
                 self.assertEqual(elements["notifications"][1]["role"], "status")
                 self.assertEqual(elements["notifications"][1]["aria-live"], "polite")

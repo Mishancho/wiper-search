@@ -7,15 +7,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const resultsContent = document.getElementById('resultsContent');
     const error = document.getElementById('error');
     const errorText = document.getElementById('errorText');
-    const favoriteInput = document.getElementById('favoriteInput');
     const notifications = document.getElementById('notifications');
     const copyStatus = document.getElementById('copyStatus');
     let copyStatusTimer;
     const storageKeys = {
         recent: 'part-search:recent:v1',
-        favorites: 'part-search:favorites:v1',
         notFound: 'part-search:not-found:v1'
     };
+    const legacyFavoritesKey = 'part-search:favorites:v1';
     const unsavedLists = new Set();
 
     // Same matching rule as normalize_token_for_match on the server.
@@ -65,7 +64,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     let recent = readList('recent');
-    let favorites = readList('favorites');
+    try {
+        window.localStorage.removeItem(legacyFavoritesKey);
+    } catch (err) {
+        // The removed feature must not make search unavailable when storage is blocked.
+    }
 
     function readNotFound(fallback = []) {
         if (unsavedLists.has('notFound')) return fallback;
@@ -119,7 +122,6 @@ document.addEventListener('DOMContentLoaded', function() {
             button.type = 'button';
             button.addEventListener('click', () => {
                 searchInput.value = item.display;
-                updateFavoriteButton(favoriteInput, searchInput.value, true);
                 performSearch();
             });
             const date = element('time', 'not-found-date', new Date(item.lastAttempt).toLocaleString('ru-RU'));
@@ -146,58 +148,21 @@ document.addEventListener('DOMContentLoaded', function() {
         renderNotFound();
     }
 
-    function isFavorite(value) {
-        return favorites.some(item => item.key === normalizedKey(value));
-    }
-
-    function updateFavoriteButton(button, value, input = false) {
-        const selected = isFavorite(value);
-        button.setAttribute('aria-pressed', String(selected));
-        button.disabled = !normalizedKey(value.trim());
-        button.textContent = input ? (selected ? 'Удалить из избранного' : 'Добавить в избранное') : (selected ? '★' : '☆');
-        if (!input) button.setAttribute('aria-label', `${selected ? 'Удалить из избранного' : 'Добавить в избранное'}: ${value}`);
-    }
-
-    function toggleFavorite(value) {
-        const display = value.trim();
-        const key = normalizedKey(display);
-        if (!key) return;
-        favorites = readList('favorites', favorites);
-        favorites = isFavorite(display) ? favorites.filter(item => item.key !== key) : [{ key, display }, ...favorites];
-        writeList('favorites', favorites);
-        renderPersonalLists();
-    }
-
-    function favoriteButton(value) {
-        const button = element('button', 'favorite-toggle');
-        button.type = 'button';
-        button.dataset.part = value;
-        updateFavoriteButton(button, value);
-        button.addEventListener('click', () => toggleFavorite(value));
-        return button;
-    }
-
-    function renderPersonalLists() {
-        [['recent', recent], ['favorites', favorites]].forEach(([name, items]) => {
-            const content = document.getElementById(name + 'Content');
-            content.replaceChildren();
-            document.getElementById(name).hidden = items.length === 0;
-            items.forEach(item => {
-                const row = element('div', 'personal-item');
-                const button = element('button', 'personal-search', item.display);
-                button.type = 'button';
-                button.addEventListener('click', () => {
-                    searchInput.value = item.display;
-                    updateFavoriteButton(favoriteInput, searchInput.value, true);
-                    performSearch();
-                });
-                row.append(button);
-                if (name === 'favorites') row.append(favoriteButton(item.display));
-                content.append(row);
+    function renderRecent() {
+        const content = document.getElementById('recentContent');
+        content.replaceChildren();
+        document.getElementById('recent').hidden = recent.length === 0;
+        recent.forEach(item => {
+            const row = element('div', 'personal-item');
+            const button = element('button', 'personal-search', item.display);
+            button.type = 'button';
+            button.addEventListener('click', () => {
+                searchInput.value = item.display;
+                performSearch();
             });
+            row.append(button);
+            content.append(row);
         });
-        updateFavoriteButton(favoriteInput, searchInput.value, true);
-        resultsContent.querySelectorAll('.favorite-toggle').forEach(button => updateFavoriteButton(button, button.dataset.part));
     }
 
     function recordSearch(partNumber) {
@@ -206,7 +171,7 @@ document.addEventListener('DOMContentLoaded', function() {
         recent = readList('recent', recent);
         recent = [{ key, display: partNumber }, ...recent.filter(item => item.key !== key)].slice(0, 20);
         writeList('recent', recent);
-        renderPersonalLists();
+        renderRecent();
     }
 
     const sectionNames = {
@@ -293,25 +258,61 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function copyButton(value, className = 'copy-part', label = value) {
-        const button = element('button', className, label);
+    function copyButton(value) {
+        const button = element('button', 'copy-part');
         button.type = 'button';
         button.setAttribute('aria-label', `Копировать артикул: ${value}`);
-        button.title = 'Копировать артикул';
+        button.title = `Копировать артикул: ${value}`;
+        const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        icon.setAttribute('viewBox', '0 0 24 24');
+        icon.setAttribute('aria-hidden', 'true');
+        icon.setAttribute('focusable', 'false');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M8 7V5a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-2v2a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4v-7a4 4 0 0 1 4-4h2Zm3-2a1 1 0 0 0-1 1v1h3a4 4 0 0 1 4 4v3h2a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1h-8Zm2 4H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z');
+        icon.append(path);
+        button.append(icon);
         button.addEventListener('click', () => copyText(value));
         return button;
     }
 
-    function groupCopyText(group) {
-        const values = searchEndpoint === '/search-brake-pads' ? [group.oe_analogue, group.not_original] : group.all_parts;
+    function appendPartWithCopy(container, value, className) {
+        container.append(element('span', className, value), copyButton(value));
+    }
+
+    function catalogParts(group) {
         const seen = new Set([normalizedKey(group.main_part)]);
-        const alternatives = values.filter(value => {
+        return group.all_parts.filter(part => {
+            const key = normalizedKey(part);
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
+    function brakeCatalogValues(group) {
+        const seen = new Set([normalizedKey(group.main_part)]);
+        return [
+            ['Оригинальный аналог', group.oe_analogue],
+            ['Неоригинальные аналоги', group.not_original]
+        ].filter(([, value]) => {
             const key = normalizedKey(value);
             if (!key || seen.has(key)) return false;
             seen.add(key);
             return true;
         });
-        return `Основной артикул: ${group.main_part}` + (alternatives.length ? `\nАналоги:\n${alternatives.join('\n')}` : '');
+    }
+
+    function appendCrossCategoryHint(container, otherCategory, partNumber) {
+        if (!otherCategory) return;
+        const isBrakes = otherCategory === 'brake-pads';
+        const label = isBrakes ? 'тормозных колодках' : 'дворниках';
+        const href = `${isBrakes ? '/brake-pads' : '/'}?part_number=${encodeURIComponent(partNumber)}`;
+        const hint = element('div', 'cross-category-hint');
+        hint.append(element('p', '', `Этот номер есть в разделе «${label}».`));
+        const link = element('a', 'text-action category-link', isBrakes ? 'Перейти к колодкам' : 'Перейти к дворникам');
+        link.href = href;
+        hint.append(link);
+        container.append(hint);
     }
 
     function showResults(data, partNumber) {
@@ -323,47 +324,53 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!data.results || data.results.length === 0) {
             const group = element('div', 'result-group');
             group.append(element('p', 'empty-result', `Артикул «${partNumber}» не найден в базе.`));
+            appendCrossCategoryHint(group, data.other_category, partNumber);
             resultsContent.append(group);
         } else {
+            if (data.results.length > 1) {
+                resultsContent.append(element('p', 'match-warning', 'Найдено несколько вариантов — требуется проверка.'));
+            }
             data.results.forEach(group => {
                 const card = element('div', 'result-group');
-                const heading = element('div', 'result-main');
-                const mainPart = element('span', 'main-part', 'Основной артикул: ');
-                mainPart.append(copyButton(group.main_part, 'copy-part main-part-number'));
-                heading.append(mainPart);
-                heading.append(favoriteButton(group.main_part));
-                heading.append(element('span', 'section-badge', sectionLabel(group.section)));
-                card.append(heading);
-                const copyAll = element('button', 'text-action copy-all', 'Копировать все');
-                copyAll.type = 'button';
-                copyAll.setAttribute('aria-label', `Копировать все: ${group.main_part}`);
-                copyAll.addEventListener('click', () => copyText(groupCopyText(group)));
-                card.append(copyAll);
+                const stock = element('div', 'stock-result');
+                stock.append(element('span', 'stock-label', 'В заказ-наряд'));
+                appendPartWithCopy(stock, group.main_part, 'stock-part');
+                stock.append(element('span', 'section-badge', sectionLabel(group.section)));
+                card.append(stock);
+                card.append(element('p', 'match-query', `Найдено по запросу: ${partNumber}`));
+                card.append(element('p', 'match-disclaimer', 'Совпадение в таблице — проверьте применимость при сомнении.'));
 
                 if (searchEndpoint === '/search-brake-pads') {
-                    const details = element('div', 'result-details');
-                    [
-                        ['Оригинальный аналог', group.oe_analogue],
-                        ['Неоригинальные аналоги', group.not_original]
-                    ].forEach(([label, value]) => {
+                    const values = brakeCatalogValues(group);
+                    if (values.length) {
+                        const details = element('details', 'catalog-matches');
+                        details.append(element('summary', 'catalog-summary', `Показать каталожные соответствия (${values.length})`));
+                        const content = element('div', 'result-details');
+                        values.forEach(([label, value]) => {
                         if (!value) return;
                         const row = element('div', 'detail-row');
                         row.append(element('span', 'detail-label', `${label}:`));
-                        row.append(copyButton(value, 'copy-part detail-value'));
-                        row.append(favoriteButton(value));
-                        details.append(row);
-                    });
-                    card.append(details);
+                        appendPartWithCopy(row, value, 'detail-value');
+                            content.append(row);
+                        });
+                        details.append(content);
+                        card.append(details);
+                    }
                 } else {
-                    const parts = element('div', 'result-parts');
-                    group.all_parts.forEach(part => {
-                        const highlighted = part.toUpperCase() === partNumber.toUpperCase();
-                        const item = element('div', 'result-part');
-                        item.append(copyButton(part, highlighted ? 'copy-part part-badge highlighted' : 'copy-part part-badge'));
-                        item.append(favoriteButton(part));
-                        parts.append(item);
-                    });
-                    card.append(parts);
+                    const parts = catalogParts(group);
+                    if (parts.length) {
+                        const details = element('details', 'catalog-matches');
+                        details.append(element('summary', 'catalog-summary', `Показать каталожные соответствия (${parts.length})`));
+                        const content = element('div', 'result-parts');
+                        parts.forEach(part => {
+                            const highlighted = normalizedKey(part) === normalizedKey(partNumber);
+                            const item = element('div', 'result-part');
+                            appendPartWithCopy(item, part, highlighted ? 'part-badge highlighted' : 'part-badge');
+                            content.append(item);
+                        });
+                        details.append(content);
+                        card.append(details);
+                    }
                 }
                 resultsContent.append(card);
             });
@@ -416,6 +423,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     const prefixData = await prefixResponse.json();
                     if (searchId !== latestSearchId) return;
                     validateResults(prefixData);
+                    if (!prefixData.results.length && data.other_category) {
+                        prefixData.other_category = data.other_category;
+                    }
                     showResults(prefixData, partNumber);
                     recordSearch(partNumber);
                     updateNotFound(prefixData, partNumber);
@@ -443,16 +453,14 @@ document.addEventListener('DOMContentLoaded', function() {
             !group || typeof group.main_part !== 'string' ||
             (searchEndpoint === '/search' && (!Array.isArray(group.all_parts) || group.all_parts.some(part => typeof part !== 'string'))) ||
             (searchEndpoint === '/search-brake-pads' && [group.oe_analogue, group.not_original].some(value => value != null && typeof value !== 'string'))
-        )) throw new Error('Invalid search response');
+        ) || (data.other_category && !['wipers', 'brake-pads'].includes(data.other_category))) throw new Error('Invalid search response');
     }
 
-    searchInput.addEventListener('input', () => updateFavoriteButton(favoriteInput, searchInput.value, true));
-    favoriteInput.addEventListener('click', () => toggleFavorite(searchInput.value));
     document.getElementById('clearRecent').addEventListener('click', () => {
         if (!window.confirm('Очистить всю историю поиска?')) return;
         recent = [];
         writeList('recent', recent);
-        renderPersonalLists();
+        renderRecent();
     });
     document.getElementById('clearNotFound').addEventListener('click', () => {
         if (!window.confirm('Очистить весь журнал ненайденных артикулов?')) return;
@@ -463,12 +471,11 @@ document.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('storage', event => {
         if (event.storageArea !== window.localStorage) return;
         if (event.key === null || event.key === storageKeys.recent) recent = readList('recent', recent);
-        if (event.key === null || event.key === storageKeys.favorites) favorites = readList('favorites', favorites);
         if (event.key === null || event.key === storageKeys.notFound) notFound = readNotFound(notFound);
-        if (event.key === null || event.key === storageKeys.recent || event.key === storageKeys.favorites) renderPersonalLists();
+        if (event.key === null || event.key === storageKeys.recent) renderRecent();
         if (event.key === null || event.key === storageKeys.notFound) renderNotFound();
     });
-    renderPersonalLists();
+    renderRecent();
     renderNotFound();
 
     // Отправка формы работает и по Enter, и по кнопке, включая экранную клавиатуру.
@@ -476,6 +483,12 @@ document.addEventListener('DOMContentLoaded', function() {
         event.preventDefault();
         performSearch();
     });
+
+    const transferredPartNumber = new URLSearchParams(window.location.search).get('part_number');
+    if (transferredPartNumber) {
+        searchInput.value = transferredPartNumber;
+        performSearch();
+    }
 
     if (window.innerWidth > 768) searchInput.focus();
 

@@ -168,6 +168,78 @@ class PartNumberNormalizationTests(unittest.TestCase):
 
 
 class SearchCacheTests(unittest.TestCase):
+    def test_generic_worksheets_are_assigned_to_only_one_category(self):
+        worksheets = [
+            (
+                "F004",
+                [
+                    ["Front Wipers"],
+                    ["STOCK-WIPER", "CATALOG-WIPER"],
+                ],
+            ),
+            (
+                "P004",
+                [
+                    ["Part Number", "OE Analogue", "Not Original"],
+                    ["STOCK-PAD", "CATALOG-PAD", "ALT-PAD"],
+                ],
+            ),
+        ]
+        with patch("app._worksheet_rows", return_value=worksheets):
+            wipers, brake_pads = get_all_google_sheets_data()
+
+        self.assertEqual(
+            wipers,
+            [
+                {
+                    "main_part": "STOCK-WIPER",
+                    "alt_parts": "CATALOG-WIPER",
+                    "section": "Front Wipers",
+                }
+            ],
+        )
+        self.assertEqual(
+            brake_pads,
+            [
+                {
+                    "main_part": "STOCK-PAD",
+                    "oe_analogue": "CATALOG-PAD",
+                    "not_original": "ALT-PAD",
+                    "section": "P004",
+                }
+            ],
+        )
+
+    def test_ambiguous_worksheet_is_not_added_to_either_category(self):
+        worksheets = [
+            (
+                "Mixed",
+                [
+                    ["STOCK-WIPER", "CATALOG-WIPER"],
+                    ["STOCK-PAD", "CATALOG-PAD", "ALT-PAD"],
+                ],
+            )
+        ]
+        with patch("app._worksheet_rows", return_value=worksheets):
+            self.assertEqual(get_all_google_sheets_data(), ([], []))
+
+    def test_wiper_note_in_a_third_column_does_not_create_brake_data(self):
+        worksheets = [
+            (
+                "Wipers",
+                [
+                    ["Back Wipers"],
+                    ["STOCK-WIPER", "CATALOG-WIPER", "check mounting"],
+                ],
+            )
+        ]
+        with patch("app._worksheet_rows", return_value=worksheets):
+            wipers, brake_pads = get_all_google_sheets_data()
+
+        self.assertEqual(wipers[0]["main_part"], "STOCK-WIPER")
+        self.assertEqual(wipers[0]["alt_parts"], "CATALOG-WIPER")
+        self.assertEqual(brake_pads, [])
+
     def test_snapshot_serves_wipers_brake_pads_and_prefixes(self):
         cache = SearchCache(loader=snapshot)
 

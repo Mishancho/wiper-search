@@ -252,31 +252,119 @@ summary:focus-visible {
     gap: 10px;
 }
 
-.copy-part {
-    font: inherit;
-    color: inherit;
-    border: 1px solid #ccd2e7;
-    background: transparent;
-    border-radius: 10px;
-    padding: 6px 8px;
-    min-height: 44px;
-    max-width: 100%;
-    cursor: pointer;
+.stock-result {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.stock-label {
+    flex-basis: 100%;
+    color: #52606d;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.stock-part {
+    color: #263681;
+    font-size: 1.35rem;
+    font-weight: 700;
     overflow-wrap: anywhere;
     user-select: text;
 }
 
+.match-query,
+.match-disclaimer {
+    margin: 8px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.match-query {
+    color: #52606d;
+    font-size: 0.92rem;
+}
+
+.match-disclaimer {
+    color: #6c757d;
+    font-size: 0.82rem;
+}
+
+.catalog-matches {
+    margin-top: 14px;
+    border-top: 1px solid #dde1eb;
+    padding-top: 10px;
+}
+
+.catalog-summary {
+    color: #3f50af;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.catalog-matches[open] .catalog-summary {
+    margin-bottom: 10px;
+}
+
+.match-warning,
+.cross-category-hint {
+    border-radius: 10px;
+    margin: 0 0 14px;
+    padding: 12px;
+}
+
+.match-warning {
+    background: #fff3cd;
+    color: #735600;
+    font-weight: 600;
+}
+
+.cross-category-hint {
+    background: #edf0fd;
+    color: #263681;
+}
+
+.cross-category-hint p {
+    margin: 0 0 10px;
+}
+
+.category-link {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+}
+
+.copy-part {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    color: #3f50af;
+    border: 1px solid #ccd2e7;
+    background: #f5f6fc;
+    border-radius: 8px;
+    padding: 0;
+    cursor: pointer;
+}
+
 .copy-part:hover {
-    text-decoration: underline;
+    background: #e8ebfa;
+}
+
+.copy-part svg {
+    width: 17px;
+    height: 17px;
+    fill: currentColor;
 }
 
 .copy-part:focus-visible {
     outline: 3px solid #263681;
     outline-offset: 3px;
-}
-
-.copy-all {
-    margin-bottom: 12px;
 }
 
 .clipboard-fallback {
@@ -308,6 +396,21 @@ summary:focus-visible {
     box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
     max-width: 100%;
     overflow-wrap: anywhere;
+    user-select: text;
+}
+
+.main-part-number,
+.detail-value,
+.stock-part {
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+
+.main-part {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
 .empty-result,
@@ -318,6 +421,7 @@ summary:focus-visible {
 
 .detail-row {
     display: flex;
+    align-items: center;
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 10px;
@@ -327,10 +431,7 @@ summary:focus-visible {
     font-weight: 600;
 }
 
-.detail-value {
-    min-width: 0;
-    overflow-wrap: anywhere;
-}
+.detail-value { min-width: 0; }
 
 .personal-section {
     background: white;
@@ -395,8 +496,7 @@ summary:focus-visible {
 }
 
 .text-action,
-.personal-search,
-.favorite-toggle {
+.personal-search {
     font: inherit;
     border: 1px solid #ccd2e7;
     border-radius: 10px;
@@ -409,28 +509,13 @@ summary:focus-visible {
     min-width: 0;
 }
 
-#favoriteInput {
-    margin-top: 10px;
-}
-
-.favorite-toggle {
-    flex-shrink: 0;
-    font-size: 1.2rem;
-}
-
-.favorite-toggle[aria-pressed="true"] {
-    color: #735600;
-    background: #fff3c4;
-}
-
 .text-action:disabled {
     color: #6c757d;
     cursor: default;
 }
 
 .text-action:focus-visible,
-.personal-search:focus-visible,
-.favorite-toggle:focus-visible {
+.personal-search:focus-visible {
     outline: 3px solid #263681;
     outline-offset: 3px;
 }
@@ -456,6 +541,10 @@ summary:focus-visible {
 
 .brake-pads .result-main {
     color: #4a5568;
+}
+
+.brake-pads .stock-part {
+    color: #2d3748;
 }
 
 .brake-pads .result-group {
@@ -549,6 +638,10 @@ summary:focus-visible {
     .part-badge {
         padding: 6px 12px;
         font-size: 0.8rem;
+    }
+
+    .stock-part {
+        font-size: 1.2rem;
     }
     
     .section-badge {
