@@ -337,26 +337,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 appendPartWithCopy(stock, group.main_part, 'stock-part');
                 stock.append(element('span', 'section-badge', sectionLabel(group.section)));
                 card.append(stock);
-                card.append(element('p', 'match-query', `Найдено по запросу: ${partNumber}`));
-                card.append(element('p', 'match-disclaimer', 'Совпадение в таблице — проверьте применимость при сомнении.'));
+                const appendMatchMetadata = () => {
+                    card.append(element('p', 'match-query', `Найдено по запросу: ${partNumber}`));
+                    card.append(element('p', 'match-disclaimer', 'Совпадение в таблице — проверьте применимость при сомнении.'));
+                };
 
                 if (searchEndpoint === '/search-brake-pads') {
                     const values = brakeCatalogValues(group);
                     if (values.length) {
-                        const details = element('details', 'catalog-matches');
-                        details.append(element('summary', 'catalog-summary', `Показать каталожные соответствия (${values.length})`));
+                        const details = element('div', 'catalog-matches visible-catalog-matches');
                         const content = element('div', 'result-details');
                         values.forEach(([label, value]) => {
-                        if (!value) return;
-                        const row = element('div', 'detail-row');
-                        row.append(element('span', 'detail-label', `${label}:`));
-                        appendPartWithCopy(row, value, 'detail-value');
+                            const row = element('div', 'detail-row');
+                            row.append(element('span', 'detail-label', `${label}:`));
+                            appendPartWithCopy(row, value, 'detail-value');
                             content.append(row);
                         });
                         details.append(content);
                         card.append(details);
                     }
+                    appendMatchMetadata();
                 } else {
+                    appendMatchMetadata();
                     const parts = catalogParts(group);
                     if (parts.length) {
                         const details = element('details', 'catalog-matches');

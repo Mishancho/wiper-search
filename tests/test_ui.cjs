@@ -127,7 +127,8 @@ async function complete(page, query) {
 
 async function openCatalogMatches(page, index = 0) {
     const details = page.locator('.catalog-matches').nth(index);
-    if (await details.count()) await details.locator('summary').click();
+    const summary = details.locator('summary');
+    if (await summary.count()) await summary.click();
 }
 
 async function checkPersonalLists(page, pagePath) {
@@ -453,7 +454,14 @@ async function checkCopyActions(browser, baseURL) {
             const main = pagePath === '/' ? 'WIPER-100' : 'PAD-200';
             const alt = pagePath === '/' ? 'W1ALT' : 'P-ALT';
             await complete(page, pagePath === '/' ? 'W1-ALT' : alt);
-            assert.equal(await page.locator('.catalog-matches').evaluate(node => node.open), false);
+            if (pagePath === '/') {
+                assert.equal(await page.locator('.catalog-matches').evaluate(node => node.open), false);
+            } else {
+                assert.equal(await page.locator('.catalog-matches summary').count(), 0);
+                assert.equal(await page.locator('.detail-row').first().isVisible(), true);
+                assert.equal(await page.locator('.stock-result').evaluate(stock =>
+                    stock.nextElementSibling?.classList.contains('catalog-matches')), true);
+            }
             await openCatalogMatches(page);
             const beforeSearches = searches.length;
             const beforeStorage = await page.evaluate(() => JSON.stringify(localStorage));
@@ -507,7 +515,8 @@ async function checkCopyActions(browser, baseURL) {
             await page.locator('.match-warning').waitFor();
             assert.match(await page.locator('.match-warning').innerText(), /несколько вариантов/);
             if (pagePath === '/brake-pads') {
-                assert.match(await page.locator('.catalog-summary').first().innerText(), /\(1\)/);
+                assert.equal(await page.locator('.catalog-summary').count(), 0);
+                assert.equal(await page.locator('.detail-row').first().isVisible(), true);
             }
             await openCatalogMatches(page);
             if (pagePath === '/brake-pads') {
@@ -745,6 +754,12 @@ async function main() {
                 const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
                 await submit(page, pagePath === '/' ? 'v w1-alt' : 'P-ALT', true);
                 await page.locator('#results').waitFor({ state: 'visible' });
+                if (pagePath === '/brake-pads') {
+                    assert.equal(await page.locator('.catalog-matches summary').count(), 0);
+                    assert.equal(await page.locator('.detail-row').first().isVisible(), true);
+                    assert.equal(await page.locator('.stock-result').evaluate(stock =>
+                        stock.nextElementSibling?.classList.contains('catalog-matches')), true);
+                }
                 await openCatalogMatches(page);
                 const text = await page.locator('#resultsContent').innerText();
                 assert.match(text, pagePath === '/' ? /В заказ-наряд\s*WIPER-100/i : /В заказ-наряд\s*PAD-200/i);
