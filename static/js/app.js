@@ -292,8 +292,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function brakeCatalogValues(group) {
         const seen = new Set([normalizedKey(group.main_part)]);
         return [
-            ['Оригинальный аналог', group.oe_analogue],
-            ['Неоригинальные аналоги', group.not_original]
+            ['Неоригинальные аналоги', group.not_original],
+            ['Оригинальный аналог', group.oe_analogue]
         ].filter(([, value]) => {
             const key = normalizedKey(value);
             if (!key || seen.has(key)) return false;
@@ -361,8 +361,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     appendMatchMetadata();
                     const parts = catalogParts(group);
                     if (parts.length) {
-                        const details = element('details', 'catalog-matches');
-                        details.append(element('summary', 'catalog-summary', `Показать каталожные соответствия (${parts.length})`));
+                        const details = element('div', 'catalog-matches visible-catalog-matches');
                         const content = element('div', 'result-parts');
                         parts.forEach(part => {
                             const highlighted = normalizedKey(part) === normalizedKey(partNumber);

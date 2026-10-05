@@ -125,12 +125,6 @@ async function complete(page, query) {
     await page.locator('#results').waitFor({ state: 'visible' });
 }
 
-async function openCatalogMatches(page, index = 0) {
-    const details = page.locator('.catalog-matches').nth(index);
-    const summary = details.locator('summary');
-    if (await summary.count()) await summary.click();
-}
-
 async function checkPersonalLists(page, pagePath) {
     await page.evaluate(() => localStorage.clear());
     await page.goto(pagePath);
@@ -455,14 +449,20 @@ async function checkCopyActions(browser, baseURL) {
             const alt = pagePath === '/' ? 'W1ALT' : 'P-ALT';
             await complete(page, pagePath === '/' ? 'W1-ALT' : alt);
             if (pagePath === '/') {
-                assert.equal(await page.locator('.catalog-matches').evaluate(node => node.open), false);
+                assert.equal(await page.locator('.catalog-matches summary').count(), 0);
+                assert.equal(await page.locator('.result-part').first().isVisible(), true);
+                assert.equal(await page.locator('.match-disclaimer').evaluate(disclaimer =>
+                    disclaimer.nextElementSibling?.classList.contains('catalog-matches')), true);
             } else {
                 assert.equal(await page.locator('.catalog-matches summary').count(), 0);
                 assert.equal(await page.locator('.detail-row').first().isVisible(), true);
                 assert.equal(await page.locator('.stock-result').evaluate(stock =>
                     stock.nextElementSibling?.classList.contains('catalog-matches')), true);
+                assert.deepEqual(await page.locator('.detail-label').allInnerTexts(), [
+                    'Неоригинальные аналоги:',
+                    'Оригинальный аналог:'
+                ]);
             }
-            await openCatalogMatches(page);
             const beforeSearches = searches.length;
             const beforeStorage = await page.evaluate(() => JSON.stringify(localStorage));
             const resultBefore = await page.locator('#resultsContent').innerHTML();
@@ -507,7 +507,7 @@ async function checkCopyActions(browser, baseURL) {
             const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
             const duplicateGroup = pagePath === '/' ? {
                 main_part: 'MAIN-1', all_parts: ['MAIN.1', 'ALT-2', 'alt .2', 'ALT-3', 'MAIN-1'], section: 'Wipers'
-            } : { main_part: 'MAIN-1', oe_analogue: 'MAIN.1', not_original: 'ALT-2', section: 'Brake Pads' };
+            } : { main_part: 'MAIN-1', oe_analogue: 'alt .2', not_original: 'ALT-2', section: 'Brake Pads' };
             await page.route('**' + endpoint, route => route.fulfill({ json: { results: [duplicateGroup, {
                 main_part: 'OTHER-4', all_parts: ['OTHER-4'], oe_analogue: '', not_original: ''
             }] } }));
@@ -517,17 +517,15 @@ async function checkCopyActions(browser, baseURL) {
             if (pagePath === '/brake-pads') {
                 assert.equal(await page.locator('.catalog-summary').count(), 0);
                 assert.equal(await page.locator('.detail-row').first().isVisible(), true);
+                assert.deepEqual(await page.locator('.detail-label').allInnerTexts(), ['Неоригинальные аналоги:']);
             }
-            await openCatalogMatches(page);
-            if (pagePath === '/brake-pads') {
-                assert.equal(await page.getByRole('button', { name: 'Копировать артикул: MAIN.1', exact: true }).count(), 0);
-            }
+            assert.equal(await page.getByRole('button', { name: 'Копировать артикул: ALT-2', exact: true }).count(), 1);
+            assert.equal(await page.locator('.result-group').nth(1).locator('.catalog-matches').count(), 0);
             await copied(page.getByRole('button', { name: 'Копировать артикул: MAIN-1', exact: true }).first(), 'MAIN-1');
-            await copied(page.getByRole('button', { name: 'Копировать артикул: ALT-2', exact: true }).first(), 'ALT-2');
+            await copied(page.getByRole('button', { name: 'Копировать артикул: ALT-2', exact: true }), 'ALT-2');
             await page.unroute('**' + endpoint);
             if (pagePath === '/') {
                 await complete(page, '2gm-extra');
-                await openCatalogMatches(page);
                 await copied(page.getByRole('button', { name: 'Копировать артикул: 2GM-ALT', exact: true }), '2GM-ALT');
             }
         }
@@ -550,7 +548,6 @@ async function checkReleaseScenario(browser, baseURL) {
             await page.evaluate(() => localStorage.clear());
             await page.reload();
             await complete(page, query);
-            await openCatalogMatches(page);
             assert.match(await page.locator('#resultsContent').innerText(), new RegExp(main));
             await page.getByRole('button', { name: `Копировать артикул: ${copyPart}`, exact: true }).first().click();
             assert.equal(await page.evaluate(() => navigator.clipboard.readText()), copyPart);
@@ -754,19 +751,26 @@ async function main() {
                 const endpoint = pagePath === '/' ? '/search' : '/search-brake-pads';
                 await submit(page, pagePath === '/' ? 'v w1-alt' : 'P-ALT', true);
                 await page.locator('#results').waitFor({ state: 'visible' });
-                if (pagePath === '/brake-pads') {
-                    assert.equal(await page.locator('.catalog-matches summary').count(), 0);
+                assert.equal(await page.locator('.catalog-matches summary').count(), 0);
+                if (pagePath === '/') {
+                    assert.equal(await page.locator('.result-part').first().isVisible(), true);
+                    assert.equal(await page.locator('.match-disclaimer').evaluate(disclaimer =>
+                        disclaimer.nextElementSibling?.classList.contains('catalog-matches')), true);
+                } else {
                     assert.equal(await page.locator('.detail-row').first().isVisible(), true);
                     assert.equal(await page.locator('.stock-result').evaluate(stock =>
                         stock.nextElementSibling?.classList.contains('catalog-matches')), true);
+                    assert.deepEqual(await page.locator('.detail-label').allInnerTexts(), [
+                        'Неоригинальные аналоги:',
+                        'Оригинальный аналог:'
+                    ]);
                 }
-                await openCatalogMatches(page);
                 const text = await page.locator('#resultsContent').innerText();
                 assert.match(text, pagePath === '/' ? /В заказ-наряд\s*WIPER-100/i : /В заказ-наряд\s*PAD-200/i);
                 assert.match(text, pagePath === '/' ? /Передние дворники/ : /Передние тормозные колодки/);
                 if (pagePath === '/brake-pads') {
-                    assert.match(text, /Оригинальный аналог:\s*P-ALT/);
                     assert.match(text, /Неоригинальные аналоги:\s*P-SECOND/);
+                    assert.match(text, /Оригинальный аналог:\s*P-ALT/);
                 }
                 await assertContained(page);
                 await submit(page, pagePath === '/' ? '2gm-extra' : 'P-SECOND');
